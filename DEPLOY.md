@@ -25,7 +25,7 @@ survives reboot.
 | Session keepers | `screen`, `tmux` both present |
 | Cron | `crontab` present (vixie cron — supports `@reboot`) |
 | curl / rsync | both present |
-| Tailscale | **not installed yet** (clean slate); `~/bin` absent, not on `PATH` |
+| Tailscale | Static amd64 binaries in `~/bin`; rootless userspace daemon |
 | Tailnet | `tail342046` (owner's; existing nodes: `echo` = Mac, `edi-base` = offline, phone, tablet) |
 
 ---
@@ -42,11 +42,16 @@ survives reboot.
 
 ### 1. Lay down the app
 ```bash
-ssh seedbox 'mkdir -p ~/arachne/pages ~/arachne/rulings ~/bin'
-rsync -az server.py bin/ keepalive.sh seedbox:arachne/
-# publish decision pages with the relative endpoint applied (SPEC §3):
-rsync -az /Users/pythagor/nexus/temp/decision_*.html seedbox:arachne/pages/
+ssh seedbox 'mkdir -p ~/arachne/pages ~/.local/state/arachne \
+  ~/.local/state/arachne-runtime ~/bin'
+rsync -az server.py bin keepalive.sh seedbox:arachne/
+# Enforce the relative endpoint + localStorage contract before upload:
+bin/publish-page.py /Users/pythagor/nexus/temp/decision_*.html
+rsync -az pages/ seedbox:arachne/pages/
 ```
+
+The durable rulings directory is `~/.local/state/arachne/rulings`, deliberately
+outside the source checkout.
 
 ### 2. Install Tailscale, rootless (userspace)
 No root, no TUN device — `tailscaled` runs in userspace-networking mode and still
@@ -54,7 +59,7 @@ accepts inbound tailnet connections, proxying them to the loopback port.
 ```bash
 ssh seedbox '
   cd /tmp
-  VER=1.86.2                                   # check pkgs.tailscale.com/stable/ for current
+  VER=1.98.9                                   # check pkgs.tailscale.com/stable/ for current
   curl -fsSLO "https://pkgs.tailscale.com/stable/tailscale_${VER}_amd64.tgz"
   tar -xzf "tailscale_${VER}_amd64.tgz"
   install -m755 tailscale_${VER}_amd64/tailscale tailscale_${VER}_amd64/tailscaled ~/bin/
@@ -63,16 +68,17 @@ ssh seedbox '
 
 ### 3. Start the daemon and enroll the node — **the human step**
 ```bash
-# start tailscaled (example supervision: screen; latitude per SPEC §5)
-ssh seedbox 'screen -dmS tsd ~/bin/tailscaled \
+# start tailscaled once; keepalive.sh takes over after deployment
+ssh seedbox 'nohup ~/bin/tailscaled \
     --tun=userspace-networking \
-    --statedir=$HOME/.tailscale \
-    --socket=$HOME/.tailscale/tailscaled.sock \
-    --port=0'
+    --statedir=/home/sylvanmaestro/.tailscale \
+    --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock \
+    --port=0 >~/.local/state/arachne-runtime/tailscaled.log 2>&1 </dev/null & \
+    printf "%s\n" "$!" >~/.local/state/arachne-runtime/tailscaled.pid'
 
 # bring the node up — prints a LOGIN URL; the owner opens it to authorize
 # "arachne" into tail342046:
-ssh seedbox '~/bin/tailscale --socket=$HOME/.tailscale/tailscaled.sock up \
+ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock up \
     --hostname=arachne'
 ```
 Capture the printed URL and hand it to the owner. After they authorize:
@@ -83,42 +89,36 @@ Capture the printed URL and hand it to the owner. After they authorize:
 ```bash
 # serve the loopback app at https://arachne.tail342046.ts.net/  (443).
 # NEVER `funnel` — that would make it public and break the invariant + AUP.
-ssh seedbox '~/bin/tailscale --socket=$HOME/.tailscale/tailscaled.sock \
+ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock \
     serve --bg 8788'
-ssh seedbox '~/bin/tailscale --socket=$HOME/.tailscale/tailscaled.sock serve status'
+ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock serve status'
 ```
 `tailscale serve` works in userspace mode — the proxying happens inside
 `tailscaled`, no kernel routing needed.
 
-### 5. Run the server (example: screen)
+### 5. Run the server
 ```bash
-ssh seedbox 'cd ~/arachne && screen -dmS arachne \
-    env BEAN_DIR=$HOME/arachne BEAN_PORT=8788 /usr/bin/python3 server.py'
+ssh seedbox 'cd ~/arachne && ./keepalive.sh'
 ssh seedbox 'curl -s localhost:8788/health'      # {"ok": true, ...}
 ```
 
 ### 6. Survive reboot + self-heal (example: cron; mechanism is latitude)
-A tiny `keepalive.sh` that (re)starts `tailscaled`, `serve`, and the app if any
-is down, driven by cron:
+The checked-in `keepalive.sh` idempotently (re)starts `tailscaled`, configures
+`serve`, and restarts the app if its loopback health check fails. Drive it from
+cron:
 ```cron
 @reboot          /home/sylvanmaestro/arachne/keepalive.sh
 */10 * * * *     /home/sylvanmaestro/arachne/keepalive.sh
 ```
-`keepalive.sh` sketch (idempotent; absolute paths since cron's PATH is minimal):
+
+Install those entries without disturbing the user's other cron jobs:
+
 ```bash
-#!/usr/bin/env bash
-TS=$HOME/bin/tailscale; TSD=$HOME/bin/tailscaled
-SOCK=$HOME/.tailscale/tailscaled.sock
-pgrep -u "$USER" -f tailscaled >/dev/null || \
-  screen -dmS tsd "$TSD" --tun=userspace-networking \
-    --statedir=$HOME/.tailscale --socket="$SOCK" --port=0
-"$TS" --socket="$SOCK" serve status >/dev/null 2>&1 || \
-  "$TS" --socket="$SOCK" serve --bg 8788
-curl -sf localhost:8788/health >/dev/null || \
-  ( cd "$HOME/arachne" && screen -dmS arachne \
-    env BEAN_DIR=$HOME/arachne BEAN_PORT=8788 /usr/bin/python3 server.py )
+ssh seedbox 'cd ~/arachne && ./bin/install-cron.sh'
 ```
-*(user-systemd with `Restart=always` + a `.timer` is an equally valid choice.)*
+
+The script uses PID files and logs under `~/.local/state/arachne-runtime/`; it
+does not depend on cron's minimal `PATH`.
 
 ---
 
@@ -139,9 +139,10 @@ within the Whatbox software rules and AUP.
 ## Teardown
 
 ```bash
-ssh seedbox '~/bin/tailscale --socket=$HOME/.tailscale/tailscaled.sock serve reset'
-ssh seedbox '~/bin/tailscale --socket=$HOME/.tailscale/tailscaled.sock down'
-ssh seedbox 'screen -S arachne -X quit; screen -S tsd -X quit'
-ssh seedbox 'crontab -l | grep -v arachne/keepalive.sh | crontab -'
+ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock serve reset'
+ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock down'
+ssh seedbox 'kill "$(cat ~/.local/state/arachne-runtime/server.pid)" \
+  "$(cat ~/.local/state/arachne-runtime/tailscaled.pid)"'
+ssh seedbox 'cd ~/arachne && ./bin/install-cron.sh --remove'
 # then remove the arachne node in the admin console.
 ```

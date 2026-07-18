@@ -32,7 +32,7 @@ Three properties a local `AskUserQuestion` can't offer at once:
    │ tailscaled (userspace, rootless) ── tailscale serve → :8788     │
    │ server.py  (stdlib only, bound 127.0.0.1:8788)                  │
    │   POST /ruling ─notify→ threading.Condition ─release→ GET /wait  │
-   │   pages/decision_*.html          rulings/ruling_*.md|.json       │
+   │   pages/decision_*.html       ~/.local/state/arachne/rulings/    │
    └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -66,28 +66,46 @@ arachne/
   DEPLOY.md        ← seedbox + Tailscale runbook (one human step, flagged)
   server.py        ← the server (created by the implementer, per SPEC)
   bin/arm-wake.sh  ← the agent-side wake loop (per SPEC)
+  bin/publish-page.py ← enforces relative POST + localStorage at publish
+  bin/install-cron.sh ← idempotently installs the watchdog schedule
   keepalive.sh     ← cron health-check / restart (per DEPLOY)
   pages/           ← served decision pages (content; git-ignored by default)
-  rulings/         ← filed rulings (runtime state; git-ignored)
+  tests/           ← real-process end-to-end acceptance tests
 ```
+
+Rulings and wake cursors live outside the repository by default under
+`~/.local/state/arachne/`. Production can set `ARACHNE_DATA_DIR` explicitly.
 
 ## Quickstart (local, no Tailscale — proves the wake loop)
 
 ```bash
-BEAN_DIR="$PWD" python3 server.py            # serves ./pages, files ./rulings
+python3 server.py                             # pages here; state outside the repo
 # in another shell, arm the wake:
 ARACHNE_URL=http://127.0.0.1:8788 bin/arm-wake.sh &
 # open http://127.0.0.1:8788/decision_476_relationship_drift.html, submit →
 # the backgrounded arm-wake.sh prints the ruling JSON and exits.
 ```
 
+Publish an existing decision page through the contract checker first. It
+rewrites the old absolute loopback endpoint to same-origin `/ruling` and fails
+loud if the page does not preserve in-progress state:
+
+```bash
+bin/publish-page.py /path/to/decision_476_relationship_drift.html
+```
+
+Run the acceptance suite with:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
 To make it always-on and reachable from your phone, follow [`DEPLOY.md`](./DEPLOY.md).
 
 ## Status
 
-Specification ready to implement — **broad by design**, so the implementer picks
-the *how* (framework, wake transport, storage, supervision) within a small set
-of fixed invariants. Target host: the Whatbox seedbox (`proteus.whatbox.ca`,
-tailnet `tail342046`). The design is host-agnostic — it can migrate to the home
-server (`edi-base`) once that node is back on the tailnet, changing nothing but
-the node name in the URL.
+Implemented with Python's standard library, flat-file atomic persistence, a
+condition-variable long poll, and a rootless watchdog. Target host: the Whatbox
+seedbox (`proteus.whatbox.ca`, tailnet `tail342046`). The design is host-agnostic
+— it can migrate to the home server (`edi-base`) once that node is back on the
+tailnet, changing nothing but the node name in the URL.

@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Published decision pages are runtime content, not application source.
+pages/*.html
+!pages/.gitkeep
+
+# Rulings and cursors must never enter source control.
+rulings/
+.arachne-state/
+
+# Local test and tooling state.
+.coverage
+.pytest_cache/
