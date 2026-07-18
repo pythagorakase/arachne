@@ -30,25 +30,35 @@ Three properties a local `AskUserQuestion` can't offer at once:
         ▼ https://arachne.<tailnet>.ts.net         │ harness re-invokes the agent
    ┌─ always-on host (seedbox today) ──────────────┴─────────────────┐
    │ tailscaled (userspace, rootless) ── tailscale serve → :8788     │
-   │ server.py  (stdlib only, bound 127.0.0.1:8788)                  │
+   │ server.py  (loopback + owner-only application token)            │
    │   POST /ruling ─notify→ threading.Condition ─release→ GET /wait  │
    │   pages/decision_*.html       ~/.local/state/arachne/rulings/    │
    └─────────────────────────────────────────────────────────────────┘
 ```
 
-The server binds **loopback only**. Reachability comes entirely from
+The server binds **loopback only**. Remote reachability comes entirely from
 `tailscale serve`, which exposes it **tailnet-only** over TLS at a stable
-MagicDNS name. Authentication is *device identity* — the Tailscale node key is
-the credential, so there is no login moment for a human on an enrolled device.
+MagicDNS name. Tailscale device identity gates remote access. An additional
+owner-only application token gates the loopback listener because loopback is
+host-wide on a shared seedbox.
+
+Browsers exchange the token once at `/bootstrap` for a two-day `Secure`,
+`HttpOnly`, `SameSite=Strict` cookie; decision HTML never contains the secret.
+The wake client reads the same token from an owner-only state file and sends it
+as a bearer credential. Generate a device bootstrap link with:
+
+```bash
+bin/bootstrap-url.py --open decision_476_relationship_drift.html
+```
 
 ## Security & host-policy posture
 
 - **No public surface.** Nothing listens on the host's public interface;
   `tailscale serve` (never `funnel`) keeps it inside the tailnet.
-- **Authenticated by construction.** Only enrolled tailnet devices can reach it,
-  so it is not "a public directory service with no authentication" (the one
-  Whatbox AUP clause that bears on a hosted service) — it is neither public nor
-  unauthenticated.
+- **Authenticated at both boundaries.** Tailscale authenticates remote devices;
+  the application token prevents another account on the shared host from using
+  host-wide loopback to read pages, read rulings, or forge one. It is neither
+  public nor unauthenticated.
 - **Featherweight, rootless, no prohibited category.** stdlib `http.server`,
   userspace `tailscaled`, no root, no LLM/mining/P2P/Tor. Well inside a shared
   seedbox's rules.
@@ -66,6 +76,7 @@ arachne/
   DEPLOY.md        ← seedbox + Tailscale runbook (one human step, flagged)
   server.py        ← the server (created by the implementer, per SPEC)
   bin/arm-wake.sh  ← the agent-side wake loop (per SPEC)
+  bin/bootstrap-url.py ← establishes an authenticated browser session
   bin/publish-page.py ← enforces relative POST + localStorage at publish
   bin/install-cron.sh ← idempotently installs the watchdog schedule
   keepalive.sh     ← cron health-check / restart (per DEPLOY)
@@ -73,16 +84,19 @@ arachne/
   tests/           ← real-process end-to-end acceptance tests
 ```
 
-Rulings and wake cursors live outside the repository by default under
-`~/.local/state/arachne/`. Production can set `ARACHNE_DATA_DIR` explicitly.
+Rulings, the generated authentication token, and wake cursors live outside the
+repository by default under `~/.local/state/arachne/`. Production can set
+`ARACHNE_DATA_DIR` or `ARACHNE_TOKEN_FILE` explicitly.
 
 ## Quickstart (local, no Tailscale — proves the wake loop)
 
 ```bash
-python3 server.py                             # pages here; state outside the repo
+ARACHNE_SECURE_COOKIE=false python3 server.py # local HTTP only; production stays Secure
 # in another shell, arm the wake:
 ARACHNE_URL=http://127.0.0.1:8788 bin/arm-wake.sh &
-# open http://127.0.0.1:8788/decision_476_relationship_drift.html, submit →
+# bootstrap the browser once, then submit:
+bin/bootstrap-url.py --base-url http://127.0.0.1:8788 --open \
+  decision_476_relationship_drift.html
 # the backgrounded arm-wake.sh prints the ruling JSON and exits.
 ```
 

@@ -5,7 +5,7 @@ Whatbox seedbox, tailnet-only. Commands are **illustrative examples** — the
 supervision mechanism especially is the implementer's choice (see
 [`SPEC.md`](./SPEC.md) §5). What's fixed are the invariants (§2 there):
 loopback-only bind, `tailscale serve` not `funnel`, rootless `tailscaled`,
-survives reboot.
+application authentication on shared-host loopback, survives reboot.
 
 > **One human step, flagged.** Enrolling the node into the tailnet requires a
 > browser login (`tailscale up` prints a URL the owner must visit). This is the
@@ -27,6 +27,7 @@ survives reboot.
 | curl / rsync | both present |
 | Tailscale | Static amd64 binaries in `~/bin`; rootless userspace daemon |
 | Tailnet | `tail342046` (owner's; existing nodes: `echo` = Mac, `edi-base` = offline, phone, tablet) |
+| Isolation | Shared host/network namespace; loopback is **not** a per-user trust boundary |
 
 ---
 
@@ -51,7 +52,9 @@ rsync -az pages/ seedbox:arachne/pages/
 ```
 
 The durable rulings directory is `~/.local/state/arachne/rulings`, deliberately
-outside the source checkout.
+outside the source checkout. On first boot the server also creates
+`~/.local/state/arachne/auth-token` with mode `0600`; never put that file in the
+repository or decision HTML.
 
 ### 2. Install Tailscale, rootless (userspace)
 No root, no TUN device — `tailscaled` runs in userspace-networking mode and still
@@ -102,6 +105,25 @@ ssh seedbox 'cd ~/arachne && ./keepalive.sh'
 ssh seedbox 'curl -s localhost:8788/health'      # {"ok": true, ...}
 ```
 
+Copy the generated token into the same owner-only state path on the machine
+that runs `arm-wake.sh`:
+
+```bash
+mkdir -p ~/.local/state/arachne && chmod 700 ~/.local/state/arachne
+scp seedbox:.local/state/arachne/auth-token ~/.local/state/arachne/auth-token
+chmod 600 ~/.local/state/arachne/auth-token
+```
+
+Do not paste the token into chat or a PR. To establish a browser session, open a
+bootstrap link directly (the secret stays in the URL fragment and is removed
+before the decision page loads):
+
+```bash
+bin/bootstrap-url.py --open decision_476_relationship_drift.html
+```
+
+The resulting cookie lasts two days. Run the helper once per browser/device.
+
 ### 6. Survive reboot + self-heal (example: cron; mechanism is latitude)
 The checked-in `keepalive.sh` idempotently (re)starts `tailscaled`, configures
 `serve`, and restarts the app if its loopback health check fails. Drive it from
@@ -129,12 +151,25 @@ especially #4 (push-wake), #5 (missed-wake race), and #8 (tailnet-only negative:
 with the Mac's Tailscale off, `arachne.tail342046.ts.net` must not answer and
 `nmap -p443,8788 proteus.whatbox.ca` must show no new open public port).
 
+Also verify the shared-host boundary: an unauthenticated direct request to
+`http://127.0.0.1:8788/<decision>.html`, `/ruling`, or `/wait` must return `401`;
+`/health` deliberately remains a non-sensitive unauthenticated liveness signal.
+
 ## Host-policy compliance (for any support conversation)
 
-Tailnet-only + device-authenticated (not a "public directory service with no
-authentication"); no public port; stdlib footprint (not resource-intensive);
-rootless; none of the prohibited categories (LLM/mining/P2P/Tor). Squarely
-within the Whatbox software rules and AUP.
+Tailnet-only + device-authenticated remotely, application-authenticated on
+shared-host loopback (not a "public directory service with no authentication");
+no public port; stdlib footprint (not resource-intensive); rootless; none of the
+prohibited categories (LLM/mining/P2P/Tor). Squarely within the Whatbox software
+rules and AUP.
+
+## Moving to `edi-base`
+
+The authentication design is host-agnostic. Copy the existing token with mode
+`0600` if existing browser bootstrap links should remain valid, or let the new
+host generate a fresh token and bootstrap each browser again. After live
+verification, remove the cron entries, Serve configuration, and node from the
+temporary seedbox.
 
 ## Teardown
 

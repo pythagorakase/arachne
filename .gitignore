@@ -9,6 +9,7 @@ pages/*.html
 # Rulings and cursors must never enter source control.
 rulings/
 .arachne-state/
+auth-token
 
 # Local test and tooling state.
 .coverage

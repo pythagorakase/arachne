@@ -2,11 +2,13 @@
 # Block on Arachne's server-side waiter and exit only when a real ruling arrives.
 
 set -uo pipefail
+umask 077
 
 arachne_url=${ARACHNE_URL:-http://127.0.0.1:8788}
 arachne_url=${arachne_url%/}
 arachne_state_root=${XDG_STATE_HOME:-${HOME}/.local/state}
 arachne_cursor_file=${ARACHNE_CURSOR_FILE:-${arachne_state_root}/arachne/cursor}
+arachne_token_file=${ARACHNE_TOKEN_FILE:-${arachne_state_root}/arachne/auth-token}
 arachne_request_timeout=${ARACHNE_REQUEST_TIMEOUT:-570}
 
 mkdir -p "$(dirname "$arachne_cursor_file")"
@@ -19,16 +21,30 @@ if [[ ! "$arachne_cursor" =~ ^[0-9]+$ ]]; then
   printf 'Arachne: invalid cursor in %s: %s\n' "$arachne_cursor_file" "$arachne_cursor" >&2
   exit 2
 fi
+if [[ ! -r "$arachne_token_file" ]]; then
+  printf 'Arachne: authentication token is not readable: %s\n' "$arachne_token_file" >&2
+  exit 2
+fi
+IFS= read -r arachne_token < "$arachne_token_file"
+if (( ${#arachne_token} < 32 || ${#arachne_token} > 256 )) || \
+  [[ "$arachne_token" == *[!A-Za-z0-9_-]* ]]; then
+  printf 'Arachne: invalid authentication token in %s\n' "$arachne_token_file" >&2
+  exit 2
+fi
 
 arachne_tmp=$(mktemp -d "${TMPDIR:-/tmp}/arachne-wake.XXXXXX")
 trap 'rm -rf "$arachne_tmp"' EXIT HUP INT TERM
 arachne_response="$arachne_tmp/response.json"
+arachne_curl_config="$arachne_tmp/curl.conf"
+printf 'header = "Authorization: Bearer %s"\n' "$arachne_token" >"$arachne_curl_config"
+unset arachne_token
 arachne_backoff=1
 
 while true; do
   arachne_http_code=000
   : >"$arachne_response"
   if arachne_http_code=$(curl \
+      --config "$arachne_curl_config" \
       --silent \
       --show-error \
       --connect-timeout 10 \

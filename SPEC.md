@@ -40,11 +40,13 @@ relax them for convenience.
 - **Tailnet-only exposure.** Reach it via `tailscale serve` (private, inside the
   tailnet, TLS). **Never `tailscale funnel`** and never a public reverse proxy —
   that would make it a public service.
-- **No unauthenticated public surface.** Authentication is the tailnet device
-  identity supplied by the transport; the app adds none, and must not be
-  reachable by anything off the tailnet. (This is also what keeps it clear of the
-  one Whatbox AUP clause that bites hosted services — "a public directory service
-  with no authentication.")
+- **No unauthenticated sensitive surface.** Tailscale device identity gates the
+  remote transport, and an owner-only application token gates pages, rulings,
+  and waiters on the host-wide loopback interface. Browser sessions use a
+  derived `Secure`, `HttpOnly`, `SameSite=Strict` cookie; the token is never
+  embedded in published HTML. Nothing may be reachable off the tailnet. (This
+  also keeps it clear of the one Whatbox AUP clause that bites hosted services —
+  "a public directory service with no authentication.")
 - **No directory listing / no traversal.** Serve only an explicit allowlist of
   page files from the pages directory. Never expose a filesystem index or allow
   `..` escapes.
@@ -82,6 +84,8 @@ keep, but not mandated.)
   `localStorage` (so a phone can resume mid-answer). The existing NEXUS pages
   (`nexus/temp/decision_*.html`) hardcode an absolute `127.0.0.1:8788` endpoint
   today; switching them to a relative path is the one change needed at publish.
+  The surrounding server session supplies authentication, so page source never
+  carries the application token.
 
 ---
 
@@ -153,7 +157,10 @@ Sol owns these choices — pick what's cleanest:
 - Exposed **tailnet-only** via `tailscale serve`, TLS, at a stable MagicDNS name
   (`arachne.<tailnet>.ts.net`). Never `funnel`.
 - `tailscaled` runs **rootless in userspace-networking mode** (no TUN, no root);
-  it accepts inbound tailnet connections and proxies to the loopback port.
+  it accepts inbound tailnet connections and proxies to the application-token-
+  protected loopback port. Filesystem-permission isolation via a Unix socket is
+  unavailable here because Tailscale 1.98.9 requires root/sudo for Serve Unix
+  socket targets.
 - Enrolling the node is a **one-time human step** (a browser login authorizes the
   node into the tailnet). Flag it; don't try to automate it away.
 - The service **survives reboot** (supervised; mechanism is latitude).

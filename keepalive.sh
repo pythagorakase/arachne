@@ -29,14 +29,34 @@ process_matches() {
   [[ "$command_line" == *"$expected"* ]]
 }
 
+find_matching_process() {
+  local expected=$1
+  local process_name pid_value command_line
+  process_name=${expected##*/}
+  while IFS= read -r pid_value; do
+    [[ "$pid_value" =~ ^[0-9]+$ ]] || continue
+    command_line=$(ps -p "$pid_value" -o args= 2>/dev/null) || continue
+    if [[ "$command_line" == "$expected" || "$command_line" == "$expected "* ]]; then
+      printf '%s\n' "$pid_value"
+      return 0
+    fi
+  done < <(pgrep -u "$(id -u)" -x "$process_name" 2>/dev/null)
+  return 1
+}
+
 if ! process_matches "$arachne_runtime/tailscaled.pid" "$arachne_tailscaled"; then
-  nohup "$arachne_tailscaled" \
-    --tun=userspace-networking \
-    --statedir="$arachne_ts_state" \
-    --socket="$arachne_ts_socket" \
-    --port=0 \
-    >>"$arachne_runtime/tailscaled.log" 2>&1 </dev/null &
-  printf '%s\n' "$!" > "$arachne_runtime/tailscaled.pid"
+  if arachne_existing_pid=$(find_matching_process "$arachne_tailscaled"); then
+    # Recover a missing or stale PID file instead of launching a second daemon.
+    printf '%s\n' "$arachne_existing_pid" > "$arachne_runtime/tailscaled.pid"
+  else
+    nohup "$arachne_tailscaled" \
+      --tun=userspace-networking \
+      --statedir="$arachne_ts_state" \
+      --socket="$arachne_ts_socket" \
+      --port=0 \
+      >>"$arachne_runtime/tailscaled.log" 2>&1 </dev/null &
+    printf '%s\n' "$!" > "$arachne_runtime/tailscaled.pid"
+  fi
 fi
 
 arachne_tailscale_ready=0

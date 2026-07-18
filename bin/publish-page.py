@@ -29,7 +29,7 @@ def publish(source: Path, pages_dir: Path) -> Path:
     except UnicodeDecodeError as exc:
         raise ValueError(f"page is not UTF-8: {source}") from exc
     html, endpoint_replacements = LOOPBACK_RULING.subn("/ruling", html)
-    html, label_replacements = LOOPBACK_LABEL.subn("this Arachne site", html)
+    html, label_replacements = LOOPBACK_LABEL.subn("same-origin /ruling", html)
     if LOOPBACK_RULING.search(html):
         raise ValueError(f"page still contains a loopback ruling endpoint: {source}")
     if "/ruling" not in html:
