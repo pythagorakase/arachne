@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import signal
+import ssl
 import stat
 import sys
 import threading
@@ -37,9 +38,28 @@ LOOPBACK_HOST = "127.0.0.1"
 MAX_REQUEST_BYTES = 1_048_576
 SESSION_COOKIE_NAME = "arachne_session"
 SESSION_COOKIE_SECONDS = 2 * 24 * 60 * 60
+SESSION_COOKIE_VERSION = "v1"
+TLS_HANDSHAKE_TIMEOUT = 5
+MAX_CONNECTION_WORKERS = 32
 PAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.html\Z")
 ISSUE_SLUG = re.compile(r"[^A-Za-z0-9._-]+")
 AUTH_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,256}\Z")
+SESSION_SIGNATURE = re.compile(r"[0-9a-f]{64}\Z")
+DECISION_PAGE_CSP = (
+    "default-src 'none'; "
+    "script-src 'unsafe-inline'; "
+    "style-src 'unsafe-inline'; "
+    "img-src 'self' data: blob:; "
+    "font-src 'self' data:; "
+    "media-src 'self' data: blob:; "
+    "connect-src 'self'; "
+    "worker-src blob:; "
+    "object-src 'none'; "
+    "base-uri 'none'; "
+    "form-action 'self'; "
+    "frame-src 'none'; "
+    "frame-ancestors 'none'"
+)
 
 
 class ClientProblem(ValueError):
@@ -130,6 +150,8 @@ class Config:
     port: int
     wait_seconds: float
     secure_cookie: bool
+    tls_cert_file: Path | None
+    tls_key_file: Path | None
 
     @classmethod
     def from_environment(cls) -> "Config":
@@ -149,6 +171,18 @@ class Config:
         ).expanduser()
         port_text = os.environ.get("ARACHNE_PORT", os.environ.get("BEAN_PORT", "8788"))
         wait_text = os.environ.get("ARACHNE_WAIT_SECONDS", "540")
+        tls_cert_text = os.environ.get("ARACHNE_TLS_CERT_FILE")
+        tls_key_text = os.environ.get("ARACHNE_TLS_KEY_FILE")
+        if (tls_cert_text is None) != (tls_key_text is None):
+            raise ValueError(
+                "ARACHNE_TLS_CERT_FILE and ARACHNE_TLS_KEY_FILE must be set together"
+            )
+        if tls_cert_text is not None and (
+            not tls_cert_text.strip() or not tls_key_text or not tls_key_text.strip()
+        ):
+            raise ValueError(
+                "ARACHNE_TLS_CERT_FILE and ARACHNE_TLS_KEY_FILE must be non-empty"
+            )
         try:
             port = int(port_text)
         except ValueError as exc:
@@ -172,11 +206,21 @@ class Config:
             port=port,
             wait_seconds=wait_seconds,
             secure_cookie=_environment_bool("ARACHNE_SECURE_COOKIE", True),
+            tls_cert_file=(
+                Path(tls_cert_text).expanduser().resolve()
+                if tls_cert_text is not None
+                else None
+            ),
+            tls_key_file=(
+                Path(tls_key_text).expanduser().resolve()
+                if tls_key_text is not None
+                else None
+            ),
         )
 
 
 class Authentication:
-    """Owner-only bearer token and a derived browser-session credential."""
+    """Owner-only bearer token and expiring browser-session credentials."""
 
     def __init__(self, token_file: Path) -> None:
         self.token_file = token_file
@@ -200,11 +244,17 @@ class Authentication:
                 f"authentication token in {token_file} must be 32-256 URL-safe characters"
             )
         self._token = token
-        self._session = hmac.new(
-            token.encode("ascii"),
-            b"arachne-browser-session-v1",
-            hashlib.sha256,
-        ).hexdigest()
+        self._session_key = token.encode("ascii")
+
+    def _session_signature(self, expires_at: int) -> str:
+        message = f"arachne-browser-session-v1:{expires_at}".encode("ascii")
+        return hmac.new(self._session_key, message, hashlib.sha256).hexdigest()
+
+    def _session_value(self, expires_at: int) -> str:
+        return (
+            f"{SESSION_COOKIE_VERSION}.{expires_at}."
+            f"{self._session_signature(expires_at)}"
+        )
 
     def accepts_token(self, candidate: object) -> bool:
         return isinstance(candidate, str) and hmac.compare_digest(candidate, self._token)
@@ -223,7 +273,23 @@ class Authentication:
         except CookieError:
             return False
         morsel = cookies.get(SESSION_COOKIE_NAME)
-        return morsel is not None and hmac.compare_digest(morsel.value, self._session)
+        if morsel is None:
+            return False
+        try:
+            version, expires_text, candidate_signature = morsel.value.split(".", 2)
+            if version != SESSION_COOKIE_VERSION or not expires_text.isascii():
+                return False
+            if not expires_text.isdecimal() or str(int(expires_text)) != expires_text:
+                return False
+            expires_at = int(expires_text)
+        except (TypeError, ValueError):
+            return False
+        expected_signature = self._session_signature(expires_at)
+        if not SESSION_SIGNATURE.fullmatch(candidate_signature):
+            return False
+        if not hmac.compare_digest(candidate_signature, expected_signature):
+            return False
+        return expires_at > int(time.time())
 
     def accepts_request(self, handler: BaseHTTPRequestHandler) -> bool:
         return self.accepts_bearer(handler.headers.get("Authorization")) or self.accepts_cookie(
@@ -231,8 +297,9 @@ class Authentication:
         )
 
     def session_cookie(self, secure: bool) -> str:
+        expires_at = int(time.time()) + SESSION_COOKIE_SECONDS
         attributes = [
-            f"{SESSION_COOKIE_NAME}={self._session}",
+            f"{SESSION_COOKIE_NAME}={self._session_value(expires_at)}",
             "Path=/",
             f"Max-Age={SESSION_COOKIE_SECONDS}",
             "HttpOnly",
@@ -349,7 +416,60 @@ class ArachneServer(ThreadingHTTPServer):
         self.config = config
         self.store = store
         self.authentication = authentication
+        if (config.tls_cert_file is None) != (config.tls_key_file is None):
+            raise RuntimeError("TLS certificate and private key must be configured together")
+        tls_context: ssl.SSLContext | None = None
+        if config.tls_cert_file is not None:
+            assert config.tls_key_file is not None
+            tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+            tls_context.load_cert_chain(config.tls_cert_file, config.tls_key_file)
+        self._tls_context = tls_context
+        self._connection_slots = threading.BoundedSemaphore(MAX_CONNECTION_WORKERS)
         super().__init__((LOOPBACK_HOST, config.port), ArachneHandler)
+        self.tls_enabled = tls_context is not None
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        """Bound unauthenticated connection workers before creating a thread."""
+
+        if not self._connection_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._connection_slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        """Perform each TLS handshake after the accept loop dispatches a worker."""
+
+        try:
+            if self._tls_context is None:
+                super().process_request_thread(request, client_address)
+                return
+
+            tls_request: ssl.SSLSocket | None = None
+            try:
+                request.settimeout(TLS_HANDSHAKE_TIMEOUT)
+                tls_request = self._tls_context.wrap_socket(
+                    request,
+                    server_side=True,
+                    do_handshake_on_connect=False,
+                )
+                tls_request.do_handshake()
+            except Exception as exc:
+                LOGGER.debug("TLS handshake failed for %s: %s", client_address[0], exc)
+                self.shutdown_request(
+                    tls_request if tls_request is not None else request
+                )
+                return
+
+            # StreamRequestHandler.setup() replaces the handshake timeout with the
+            # handler's normal request timeout before parsing HTTP.
+            super().process_request_thread(tls_request, client_address)
+        finally:
+            self._connection_slots.release()
 
 
 class ArachneHandler(BaseHTTPRequestHandler):
@@ -380,6 +500,8 @@ class ArachneHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        if self.close_connection:
+            self.send_header("Connection", "close")
         if extra_headers:
             for name, value in extra_headers.items():
                 self.send_header(name, value)
@@ -417,10 +539,12 @@ class ArachneHandler(BaseHTTPRequestHandler):
         try:
             callback()
         except ClientProblem as problem:
+            self._close_incomplete_post()
             self._problem(problem)
         except (BrokenPipeError, ConnectionResetError):
             LOGGER.info("client disconnected before the response completed")
         except Exception as exc:  # pragma: no cover - exercised by fault injection
+            self._close_incomplete_post()
             LOGGER.error("unhandled request error:\n%s", traceback.format_exc())
             try:
                 self._problem(
@@ -433,14 +557,43 @@ class ArachneHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+    def _close_incomplete_post(self) -> None:
+        if self.command == "POST" and not getattr(
+            self, "_post_body_consumed", False
+        ):
+            self.close_connection = True
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
-        self._dispatch(self._get)
+        self._dispatch_bodyless(self._get)
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
+        self._post_body_consumed = False
         self._dispatch(self._post)
 
     def do_HEAD(self) -> None:  # noqa: N802 - stdlib handler API
-        self._dispatch(self._head)
+        self._dispatch_bodyless(self._head)
+
+    def _dispatch_bodyless(self, callback: Any) -> None:
+        def guarded_callback() -> None:
+            transfer_encoding = self.headers.get_all("Transfer-Encoding", [])
+            length_headers = self.headers.get_all("Content-Length", [])
+            invalid_length = (
+                len(length_headers) > 1
+                or (
+                    len(length_headers) == 1
+                    and length_headers[0] != "0"
+                )
+            )
+            if transfer_encoding or invalid_length:
+                self.close_connection = True
+                raise ClientProblem(
+                    HTTPStatus.BAD_REQUEST,
+                    "unexpected_request_body",
+                    f"{self.command} requests must not carry a body",
+                )
+            callback()
+
+        self._dispatch(guarded_callback)
 
     def _head(self) -> None:
         parsed = urlsplit(self.path)
@@ -460,6 +613,7 @@ class ArachneHandler(BaseHTTPRequestHandler):
             "ruling_count": self.arachne.store.count,
             "bound_host": LOOPBACK_HOST,
             "port": self.arachne.server_port,
+            "tls": self.arachne.tls_enabled,
         }
 
     def _require_authentication(self) -> None:
@@ -584,7 +738,12 @@ class ArachneHandler(BaseHTTPRequestHandler):
         # Exact, top-level, regular, non-symlink HTML files are the allowlist.
         candidate = self._page_candidate(name)
         body = candidate.read_bytes()
-        self._write(HTTPStatus.OK, body, "text/html; charset=utf-8")
+        self._write(
+            HTTPStatus.OK,
+            body,
+            "text/html; charset=utf-8",
+            extra_headers={"Content-Security-Policy": DECISION_PAGE_CSP},
+        )
 
     def _post(self) -> None:
         parsed = urlsplit(self.path)
@@ -633,6 +792,15 @@ class ArachneHandler(BaseHTTPRequestHandler):
         self._json(HTTPStatus.CREATED, entry)
 
     def _read_json_payload(self, endpoint: str, noun: str) -> Any:
+        if self.headers.get("Transfer-Encoding") is not None:
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "unsupported_transfer_encoding",
+                (
+                    f"{endpoint} requires an exact Content-Length and does not "
+                    "accept Transfer-Encoding"
+                ),
+            )
         content_type = self.headers.get_content_type()
         if content_type != "application/json":
             raise ClientProblem(
@@ -640,28 +808,48 @@ class ArachneHandler(BaseHTTPRequestHandler):
                 "unsupported_media_type",
                 f"{endpoint} requires Content-Type: application/json",
             )
-        length_header = self.headers.get("Content-Length")
-        if length_header is None:
+        length_headers = self.headers.get_all("Content-Length", [])
+        if not length_headers:
             raise ClientProblem(
                 HTTPStatus.LENGTH_REQUIRED,
                 "length_required",
                 "Content-Length is required",
             )
-        try:
-            length = int(length_header)
-        except ValueError as exc:
+        if len(length_headers) != 1 or not length_headers[0].isdecimal():
             raise ClientProblem(
                 HTTPStatus.BAD_REQUEST,
                 "invalid_length",
-                "Content-Length must be an integer",
-            ) from exc
+                "Content-Length must be exactly one decimal integer",
+            )
+        length_text = length_headers[0]
+        if len(length_text) > len(str(MAX_REQUEST_BYTES)):
+            raise ClientProblem(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                "payload_too_large",
+                f"{noun} payload must be between 1 and {MAX_REQUEST_BYTES} bytes",
+            )
+        length = int(length_text)
         if length <= 0 or length > MAX_REQUEST_BYTES:
             raise ClientProblem(
                 HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
                 "payload_too_large",
                 f"{noun} payload must be between 1 and {MAX_REQUEST_BYTES} bytes",
             )
-        raw = self.rfile.read(length)
+        try:
+            raw = self.rfile.read(length)
+        except TimeoutError as exc:
+            raise ClientProblem(
+                HTTPStatus.REQUEST_TIMEOUT,
+                "request_timeout",
+                f"timed out while reading the {noun} payload",
+            ) from exc
+        if len(raw) != length:
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "incomplete_body",
+                f"expected {length} payload bytes but received {len(raw)}",
+            )
+        self._post_body_consumed = True
         try:
             payload = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -723,9 +911,11 @@ def main() -> int:
         "data_dir": str(config.data_dir),
         "token_file": str(config.token_file),
         "latest_sequence": store.latest_sequence,
+        "tls": server.tls_enabled,
     }
     print(json.dumps(startup, sort_keys=True), flush=True)
-    LOGGER.info("listening on http://%s:%s", LOOPBACK_HOST, server.server_port)
+    scheme = "https" if server.tls_enabled else "http"
+    LOGGER.info("listening on %s://%s:%s", scheme, LOOPBACK_HOST, server.server_port)
     try:
         server.serve_forever(poll_interval=0.25)
     finally:

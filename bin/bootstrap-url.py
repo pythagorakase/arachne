@@ -21,10 +21,8 @@ def main() -> int:
     parser.add_argument("page", help="published decision page name")
     parser.add_argument(
         "--base-url",
-        default=os.environ.get(
-            "ARACHNE_PUBLIC_URL", "https://arachne.tail342046.ts.net"
-        ),
-        help="public tailnet URL (default: ARACHNE_PUBLIC_URL or production URL)",
+        default=os.environ.get("ARACHNE_PUBLIC_URL"),
+        help="public tailnet URL (default: ARACHNE_PUBLIC_URL)",
     )
     parser.add_argument(
         "--token-file",
@@ -51,6 +49,8 @@ def main() -> int:
     if not AUTH_TOKEN.fullmatch(token):
         parser.error("token file does not contain a valid Arachne token")
 
+    if not arguments.base_url:
+        parser.error("set ARACHNE_PUBLIC_URL or provide --base-url")
     base_url = arguments.base_url.rstrip("/")
     url = (
         f"{base_url}/bootstrap?next={quote(page, safe='')}"

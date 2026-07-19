@@ -4,8 +4,10 @@ How to make Arachne always-on and reachable from the owner's devices, on the
 Whatbox seedbox, tailnet-only. Commands are **illustrative examples** — the
 supervision mechanism especially is the implementer's choice (see
 [`SPEC.md`](./SPEC.md) §5). What's fixed are the invariants (§2 there):
-loopback-only bind, `tailscale serve` not `funnel`, rootless `tailscaled`,
-application authentication on shared-host loopback, survives reboot.
+loopback-only bind, `tailscale serve` not `funnel`, application authentication
+on shared-host loopback, verified HTTPS from Serve to Arachne using a private
+localhost CA, and supervised restart. The seedbox daemon is rootless; Ubuntu
+uses its system daemon.
 
 > **One human step, flagged.** Enrolling the node into the tailnet requires a
 > browser login (`tailscale up` prints a URL the owner must visit). This is the
@@ -36,6 +38,8 @@ application authentication on shared-host loopback, survives reboot.
 - **MagicDNS** enabled (gives `arachne.tail342046.ts.net`).
 - **HTTPS certificates** enabled (Zero Trust → Settings → Features) — required
   for `tailscale serve` to terminate TLS at the MagicDNS name.
+- OpenSSL, used by the checked-in TLS initializer to create a private localhost
+  CA and a leaf with `DNS:localhost` and `IP:127.0.0.1` subject alternatives.
 
 ---
 
@@ -56,7 +60,44 @@ outside the source checkout. On first boot the server also creates
 `~/.local/state/arachne/auth-token` with mode `0600`; never put that file in the
 repository or decision HTML.
 
-### 2. Install Tailscale, rootless (userspace)
+### 2. Install the private localhost TLS material
+
+Create the seedbox-specific `~/.config/arachne/deployment.env` as a regular file
+owned by the deployment user with mode `0600`. `keepalive.sh` loads that path by
+default; `ARACHNE_DEPLOY_ENV` may name a different file. Use absolute paths:
+
+```dotenv
+ARACHNE_RUNTIME_DIR=/home/sylvanmaestro/.local/state/arachne-runtime
+ARACHNE_DATA_DIR=/home/sylvanmaestro/.local/state/arachne
+ARACHNE_PAGES_DIR=/home/sylvanmaestro/arachne/pages
+ARACHNE_PORT=8788
+ARACHNE_PYTHON=/usr/bin/python3
+ARACHNE_TLS_DIR=/home/sylvanmaestro/.local/state/arachne-tls
+ARACHNE_MANAGE_TAILSCALED=true
+TAILSCALE_BIN=/home/sylvanmaestro/bin/tailscale
+TAILSCALED_BIN=/home/sylvanmaestro/bin/tailscaled
+TAILSCALE_STATE_DIR=/home/sylvanmaestro/.tailscale
+TAILSCALE_SOCKET=/home/sylvanmaestro/.tailscale/tailscaled.sock
+```
+
+`ARACHNE_SYSTEM_CA_BUNDLE` may override the system bundle path; the initializer
+otherwise detects common Linux/macOS locations. Run it once before enrollment:
+
+```bash
+ssh seedbox 'set -a; . ~/.config/arachne/deployment.env; set +a; \
+  cd ~/arachne && ./bin/init-backend-tls.sh'
+```
+
+The initializer atomically creates `ca-key.pem`, `ca-cert.pem`,
+`server-key.pem`, `server-cert.pem`, and `trust-bundle.pem` in an owner-only TLS
+directory. It fails loud on partial or invalid identity material, while safely
+refreshing the derived trust bundle when the host's system CA bundle changes.
+The CA key remains host-local and owner-only; never publish or copy it into the
+app state transfer. The watchdog passes the trust bundle to rootless
+`tailscaled` and the leaf certificate/key to Arachne. It also fails closed on a
+missing, non-regular, wrong-owner, or group/other-accessible deployment file.
+
+### 3. Install Tailscale, rootless (userspace)
 No root, no TUN device — `tailscaled` runs in userspace-networking mode and still
 accepts inbound tailnet connections, proxying them to the loopback port.
 ```bash
@@ -69,10 +110,11 @@ ssh seedbox '
 '
 ```
 
-### 3. Start the daemon and enroll the node — **the human step**
+### 4. Start the daemon and enroll the node — **the human step**
 ```bash
 # start tailscaled once; keepalive.sh takes over after deployment
-ssh seedbox 'nohup ~/bin/tailscaled \
+ssh seedbox 'SSL_CERT_FILE="$HOME/.local/state/arachne-tls/trust-bundle.pem" \
+  nohup ~/bin/tailscaled \
     --tun=userspace-networking \
     --statedir=/home/sylvanmaestro/.tailscale \
     --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock \
@@ -88,21 +130,24 @@ Capture the printed URL and hand it to the owner. After they authorize:
 - In the admin console, **disable key expiry** for the `arachne` node so it
   never silently drops off (this is exactly what happened to `edi-base`).
 
-### 4. Expose it — tailnet-only, TLS
+### 5. Expose it — tailnet-only, verified TLS on both hops
 ```bash
-# serve the loopback app at https://arachne.tail342046.ts.net/  (443).
+# Serve the HTTPS loopback app at https://arachne.tail342046.ts.net/ (443).
+# Do not use an insecure-TLS target: backend certificate verification is the
+# defense against another seedbox account claiming port 8788.
 # NEVER `funnel` — that would make it public and break the invariant + AUP.
 ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock \
-    serve --bg 8788'
+    serve --bg https://localhost:8788'
 ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock serve status'
 ```
 `tailscale serve` works in userspace mode — the proxying happens inside
 `tailscaled`, no kernel routing needed.
 
-### 5. Run the server
+### 6. Run the server
 ```bash
 ssh seedbox 'cd ~/arachne && ./keepalive.sh'
-ssh seedbox 'curl -s localhost:8788/health'      # {"ok": true, ...}
+ssh seedbox 'curl --fail --cacert ~/.local/state/arachne-tls/ca-cert.pem \
+  https://localhost:8788/health'                 # includes "tls": true
 ```
 
 Copy the generated token into the same owner-only state path on the machine
@@ -112,6 +157,10 @@ that runs `arm-wake.sh`:
 mkdir -p ~/.local/state/arachne && chmod 700 ~/.local/state/arachne
 scp seedbox:.local/state/arachne/auth-token ~/.local/state/arachne/auth-token
 chmod 600 ~/.local/state/arachne/auth-token
+
+# Set both endpoints in the environment that launches the waiter/helpers.
+export ARACHNE_URL=https://arachne.tail342046.ts.net
+export ARACHNE_PUBLIC_URL=$ARACHNE_URL
 ```
 
 Do not paste the token into chat or a PR. To establish a browser session, open a
@@ -122,9 +171,10 @@ before the decision page loads):
 bin/bootstrap-url.py --open decision_476_relationship_drift.html
 ```
 
-The resulting cookie lasts two days. Run the helper once per browser/device.
+The resulting session expires after two days in both the cookie and the
+server-validated credential. Run the helper once per browser/device.
 
-### 6. Survive reboot + self-heal (example: cron; mechanism is latitude)
+### 7. Survive reboot + self-heal (example: cron; mechanism is latitude)
 The checked-in `keepalive.sh` idempotently (re)starts `tailscaled`, configures
 `serve`, and restarts the app if its loopback health check fails. Drive it from
 cron:
@@ -151,9 +201,21 @@ especially #4 (push-wake), #5 (missed-wake race), and #8 (tailnet-only negative:
 with the Mac's Tailscale off, `arachne.tail342046.ts.net` must not answer and
 `nmap -p443,8788 proteus.whatbox.ca` must show no new open public port).
 
-Also verify the shared-host boundary: an unauthenticated direct request to
-`http://127.0.0.1:8788/<decision>.html`, `/ruling`, or `/wait` must return `401`;
-`/health` deliberately remains a non-sensitive unauthenticated liveness signal.
+Verify both parts of the shared-host boundary from the seedbox:
+
+```bash
+# The real private CA succeeds and health reports "tls": true.
+curl --fail --cacert ~/.local/state/arachne-tls/ca-cert.pem \
+  https://localhost:8788/health
+
+# The OS trust store alone must reject the private backend certificate.
+curl --fail https://localhost:8788/health
+```
+
+An unauthenticated request made with `--cacert` to an allowlisted decision page,
+`/ruling`, or `/wait` must return `401`; `/health` deliberately remains a
+non-sensitive unauthenticated liveness signal. Confirm `tailscale serve status`
+shows `https://localhost:8788`, never an HTTP or insecure-TLS target.
 
 ## Host-policy compliance (for any support conversation)
 
@@ -165,19 +227,237 @@ rules and AUP.
 
 ## Moving to `edi-base`
 
-The authentication design is host-agnostic. Copy the existing token with mode
-`0600` if existing browser bootstrap links should remain valid, or let the new
-host generate a fresh token and bootstrap each browser again. After live
-verification, remove the cron entries, Serve configuration, and node from the
-temporary seedbox.
+This is a stateful cutover, not a node-name substitution. The server's next
+sequence number is reconstructed from `rulings/`, while `arm-wake.sh` retains
+its last-consumed cursor on the orchestrating machine. Starting an empty
+destination behind an existing cursor can therefore suppress several wakes.
+
+### 1. Prepare the destination without starting Arachne
+
+- Install the checkout and a destination-specific `deployment.env`; do not copy
+  the seedbox file unchanged. Point data, runtime, pages, Python, and TLS paths
+  at real `edi-base` locations.
+- Inventory the currently published HTML under the seedbox's `~/arachne/pages/`.
+  Those files are runtime content and deliberately git-ignored, so the checkout
+  alone is not a page backup.
+- Use Ubuntu's **system** `tailscaled`; do not start a second rootless daemon.
+  Give the deployment account narrow Serve authority, then verify it can read
+  status without sudo:
+
+  ```bash
+  sudo tailscale set --operator="$USER"
+  tailscale status
+  ```
+
+- With the destination environment loaded, run `bin/init-backend-tls.sh` to
+  generate a destination-specific CA/leaf set. Install its CA certificate into
+  Ubuntu's trust store so the system `tailscaled` can verify the leaf, then
+  restart it:
+
+  ```bash
+  set -a; . ~/.config/arachne/deployment.env; set +a
+  ~/arachne/bin/init-backend-tls.sh
+  sudo install -m 0644 ~/.local/state/arachne-tls/ca-cert.pem \
+    /usr/local/share/ca-certificates/arachne-localhost-ca.crt
+  sudo update-ca-certificates
+  sudo systemctl restart tailscaled
+  ```
+
+  The CA certificate is public; its signing key remains owner-only in
+  `ARACHNE_TLS_DIR`. Never copy that TLS directory with application state or
+  replace verification with an insecure HTTPS target.
+
+For example, install this as the `edi-base` deployment user's owner-only
+`~/.config/arachne/deployment.env`, replacing `/home/OWNER` with that user's
+actual home directory:
+
+```dotenv
+ARACHNE_RUNTIME_DIR=/home/OWNER/.local/state/arachne-runtime
+ARACHNE_DATA_DIR=/home/OWNER/.local/state/arachne
+ARACHNE_PAGES_DIR=/home/OWNER/arachne/pages
+ARACHNE_PORT=8788
+ARACHNE_PYTHON=/usr/bin/python3
+ARACHNE_TLS_DIR=/home/OWNER/.local/state/arachne-tls
+ARACHNE_SYSTEM_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ARACHNE_MANAGE_TAILSCALED=false
+TAILSCALE_BIN=/usr/bin/tailscale
+TAILSCALE_SOCKET=/var/run/tailscale/tailscaled.sock
+```
+
+System mode never launches or stops `tailscaled`; Ubuntu owns that lifecycle.
+The operator setting permits the unprivileged watchdog to inspect the system
+daemon and configure Serve through its socket.
+
+### 2. Warm-copy, then quiesce the source
+
+An optional warm copy can reduce downtime, but it is not the cutover copy. Copy
+the **entire** `~/.local/state/arachne/` tree, including `auth-token` and every
+file under `rulings/`, while preserving modes. In the same agent session that
+will continue after cutover, terminate any currently armed `arm-wake.sh` child
+that targets the seedbox; do not edit or advance its persisted cursor.
+
+Because form drafts live in origin-scoped browser `localStorage`, also confirm
+there is no unfinished answer at the old seedbox hostname. Finish it before the
+cutover, explicitly abandon it, or export it through page-specific tooling. A
+hostname change cannot carry a browser draft automatically.
+
+Before the final copy, create the watchdog's quiesce sentinel, remove future
+cron starts, and wait for any invocation that was already running to release its
+lock. The sentinel is checked both before and after lock acquisition, closing
+the fork-before-crontab-edit race:
+
+```bash
+ssh seedbox 'install -d -m 700 ~/.local/state/arachne-runtime && \
+  install -m 600 /dev/null ~/.local/state/arachne-runtime/QUIESCED'
+ssh seedbox 'cd ~/arachne && ./bin/install-cron.sh --remove'
+ssh seedbox 'crontab -l 2>/dev/null | grep -F "BEGIN ARACHNE" && exit 1 || exit 0'
+ssh seedbox '
+  lock=$HOME/.local/state/arachne-runtime/keepalive.lock
+  arachne_wait=0
+  while [ -d "$lock" ] && [ "$arachne_wait" -lt 300 ]; do
+    sleep 0.1
+    arachne_wait=$((arachne_wait + 1))
+  done
+  test ! -d "$lock"
+'
+ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock serve reset'
+
+# With remote writes cut off, record latest_sequence in the cutover notes.
+ssh seedbox 'curl --fail --silent \
+  --cacert ~/.local/state/arachne-tls/ca-cert.pem \
+  https://localhost:8788/health'
+```
+
+Then stop only the expected Arachne server process. Refuse to signal a missing,
+non-numeric, dead, or identity-mismatched PID:
+
+```bash
+ssh seedbox '
+  pid_file=$HOME/.local/state/arachne-runtime/server.pid
+  IFS= read -r pid <"$pid_file" || exit 0
+  case $pid in (""|*[!0-9]*) echo "invalid server PID" >&2; exit 1;; esac
+  args=$(ps -p "$pid" -o args=) || exit 0
+  expected="/usr/bin/python3 $HOME/arachne/server.py"
+  if [ "$args" = "$expected" ]; then
+    kill "$pid"
+    arachne_wait=0
+    while kill -0 "$pid" 2>/dev/null && [ "$arachne_wait" -lt 50 ]; do
+      sleep 0.1
+      arachne_wait=$((arachne_wait + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "server PID $pid did not stop" >&2
+      exit 1
+    fi
+  else
+    echo "refusing to stop PID $pid: $args" >&2
+    exit 1
+  fi
+'
+```
+
+After the source is quiescent, make the mandatory final copy through an
+owner-only local staging directory. The destination below must be a new,
+dedicated path; stop if it already exists.
+
+```bash
+arachne_cutover_dir=$(mktemp -d "${TMPDIR:-/tmp}/arachne-cutover.XXXXXX")
+chmod 700 "$arachne_cutover_dir"
+rsync --archive seedbox:.local/state/arachne/ "$arachne_cutover_dir/state/"
+rsync --archive seedbox:arachne/pages/ "$arachne_cutover_dir/pages/"
+
+ssh edi-base 'test ! -e ~/.local/state/arachne-cutover-final && \
+  install -d -m 700 ~/.local/state/arachne-cutover-final && \
+  install -d -m 755 ~/arachne/pages'
+rsync --archive "$arachne_cutover_dir/state/" \
+  edi-base:.local/state/arachne-cutover-final/
+rsync --archive --delete "$arachne_cutover_dir/pages/" edi-base:arachne/pages/
+rsync --archive --checksum --dry-run "$arachne_cutover_dir/state/" \
+  edi-base:.local/state/arachne-cutover-final/
+rsync --archive --delete --checksum --dry-run "$arachne_cutover_dir/pages/" \
+  edi-base:arachne/pages/
+```
+
+Both dry runs must show no file differences. On `edi-base`, move any prior data
+directory to a named backup, then rename `arachne-cutover-final` to `arachne`;
+do not merge a fresh final copy into an old live state tree. Verify the expected
+page names are regular, non-symlink HTML files before start. Keep the protected
+local staging directory until validation completes, then dispose of it without
+printing or copying its `auth-token` elsewhere.
+
+### 3. Start and prove continuity
+
+Start Arachne on `edi-base`, configure Serve to the verified target
+`https://localhost:8788`, and check all of the following before routing real
+decisions there:
+
+- local `/health` succeeds only with the private CA, reports `"tls": true`, and
+  has exactly the recorded source `latest_sequence`;
+- the destination rulings manifest/checksums match the quiescent source;
+- the published-page manifest/checksums match the quiescent source;
+- the orchestrator's persisted cursor is not ahead of that sequence;
+- the new MagicDNS URL is tailnet-only and rejects unauthenticated sensitive
+  requests.
+
+Then switch both agent-side endpoint variables to the exact HTTPS URL reported
+by `tailscale serve status`, and re-arm `arm-wake.sh` **from the same agent
+session**, using the existing token and cursor files. Do not leave an old
+seedbox waiter parked in parallel:
+
+```bash
+export ARACHNE_URL=https://edi-base.tail342046.ts.net
+export ARACHNE_PUBLIC_URL=$ARACHNE_URL
+bin/arm-wake.sh &
+bin/bootstrap-url.py --open phone-smoke.html  # use the published smoke-page name
+```
+
+The synthetic ruling must release that newly armed waiter and receive exactly
+the next sequence. Replace the example hostname and page name with the values
+shown by Serve and the publisher; both helpers deliberately refuse to guess a
+deployment URL.
+
+Preserving `auth-token` preserves the application secret, but browser cookies
+are scoped to the old hostname; bootstrap each browser at the new URL. If a
+deliberate fresh-state migration is chosen instead, first prove no source ruling
+is unconsumed, reset/reconcile the orchestrator cursor to the destination's
+sequence, rotate the token, and bootstrap every browser. Never combine an empty
+ruling store with the old cursor.
 
 ## Teardown
+
+Only after the destination passes the continuity test:
+
+1. Confirm the seedbox watchdog remains removed. This prevents a restart race.
+2. Reset Serve and take down the temporary rootless node.
+3. Stop the rootless `tailscaled` only after the PID-file identity check used
+   above, matching its exact binary path. Never blindly kill a PID-file value.
+4. Remove the `arachne` node in the Tailscale admin console.
+5. Retain the quiescent seedbox state as a rollback copy until the home service
+   has survived the agreed observation window; deletion is a separate action.
+
+For a rollback, first quiesce the destination with the same sentinel/lock
+procedure and reset its Serve mapping. If any destination ruling advanced the
+sequence—even the smoke ruling—reverse-sync the destination's complete app state
+and published pages into a fresh seedbox staging directory, verify checksums,
+and atomically replace the seedbox state before removing its `QUIESCED` sentinel.
+Only then reinstall seedbox cron, restore both agent-side endpoint variables,
+and re-arm the existing cursor. The narrower alternative (discarding destination
+state and lowering/reconciling the cursor) is allowed only after proving every
+discarded sequence was synthetic and never consumed as a real decision. Never
+run both origins as writable services against one cursor.
 
 ```bash
 ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock serve reset'
 ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock down'
-ssh seedbox 'kill "$(cat ~/.local/state/arachne-runtime/server.pid)" \
-  "$(cat ~/.local/state/arachne-runtime/tailscaled.pid)"'
-ssh seedbox 'cd ~/arachne && ./bin/install-cron.sh --remove'
-# then remove the arachne node in the admin console.
+ssh seedbox '
+  pid_file=$HOME/.local/state/arachne-runtime/tailscaled.pid
+  IFS= read -r pid <"$pid_file" || exit 0
+  case $pid in (""|*[!0-9]*) echo "invalid tailscaled PID" >&2; exit 1;; esac
+  args=$(ps -p "$pid" -o args=) || exit 0
+  expected=$HOME/bin/tailscaled
+  case $args in
+    ("$expected"|"$expected "*) kill "$pid" ;;
+    (*) echo "refusing to stop PID $pid: $args" >&2; exit 1 ;;
+  esac
+'
 ```

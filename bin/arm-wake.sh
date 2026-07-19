@@ -4,7 +4,8 @@
 set -uo pipefail
 umask 077
 
-arachne_url=${ARACHNE_URL:-http://127.0.0.1:8788}
+: "${ARACHNE_URL:?ARACHNE_URL must name the intended Arachne endpoint}"
+arachne_url=$ARACHNE_URL
 arachne_url=${arachne_url%/}
 arachne_state_root=${XDG_STATE_HOME:-${HOME}/.local/state}
 arachne_cursor_file=${ARACHNE_CURSOR_FILE:-${arachne_state_root}/arachne/cursor}
@@ -33,9 +34,21 @@ if (( ${#arachne_token} < 32 || ${#arachne_token} > 256 )) || \
 fi
 
 arachne_tmp=$(mktemp -d "${TMPDIR:-/tmp}/arachne-wake.XXXXXX")
-trap 'rm -rf "$arachne_tmp"' EXIT HUP INT TERM
+arachne_child_pid=
+arachne_cleanup() {
+  if [[ "$arachne_child_pid" =~ ^[0-9]+$ ]]; then
+    kill "$arachne_child_pid" 2>/dev/null || true
+    wait "$arachne_child_pid" 2>/dev/null || true
+  fi
+  rm -rf "$arachne_tmp"
+}
+trap arachne_cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 arachne_response="$arachne_tmp/response.json"
 arachne_curl_config="$arachne_tmp/curl.conf"
+arachne_http_code_file="$arachne_tmp/http-code"
 printf 'header = "Authorization: Bearer %s"\n' "$arachne_token" >"$arachne_curl_config"
 unset arachne_token
 arachne_backoff=1
@@ -43,7 +56,8 @@ arachne_backoff=1
 while true; do
   arachne_http_code=000
   : >"$arachne_response"
-  if arachne_http_code=$(curl \
+  : >"$arachne_http_code_file"
+  curl \
       --config "$arachne_curl_config" \
       --silent \
       --show-error \
@@ -51,11 +65,15 @@ while true; do
       --max-time "$arachne_request_timeout" \
       --output "$arachne_response" \
       --write-out '%{http_code}' \
-      "${arachne_url}/wait?since=${arachne_cursor}"); then
-    :
+      "${arachne_url}/wait?since=${arachne_cursor}" \
+      >"$arachne_http_code_file" &
+  arachne_child_pid=$!
+  if wait "$arachne_child_pid"; then
+    IFS= read -r arachne_http_code <"$arachne_http_code_file"
   else
     arachne_http_code=000
   fi
+  arachne_child_pid=
 
   case "$arachne_http_code" in
     200)

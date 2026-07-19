@@ -29,8 +29,8 @@ Three properties a local `AskUserQuestion` can't offer at once:
         │ POST /ruling  {issue, markdown, form}    │ exits with the ruling payload →
         ▼ https://arachne.<tailnet>.ts.net         │ harness re-invokes the agent
    ┌─ always-on host (seedbox today) ──────────────┴─────────────────┐
-   │ tailscaled (userspace, rootless) ── tailscale serve → :8788     │
-   │ server.py  (loopback + owner-only application token)            │
+   │ tailscaled (rootless) ─ tailscale serve ─ verified HTTPS → :8788 │
+   │ server.py  (loopback TLS + owner-only application token)          │
    │   POST /ruling ─notify→ threading.Condition ─release→ GET /wait  │
    │   pages/decision_*.html       ~/.local/state/arachne/rulings/    │
    └─────────────────────────────────────────────────────────────────┘
@@ -40,14 +40,19 @@ The server binds **loopback only**. Remote reachability comes entirely from
 `tailscale serve`, which exposes it **tailnet-only** over TLS at a stable
 MagicDNS name. Tailscale device identity gates remote access. An additional
 owner-only application token gates the loopback listener because loopback is
-host-wide on a shared seedbox.
+host-wide on a shared seedbox. The Serve-to-application hop is verified HTTPS:
+`tailscaled` trusts a private localhost CA and Arachne holds the corresponding
+server key. Merely claiming port 8788 therefore cannot impersonate Arachne and
+capture forwarded credentials.
 
-Browsers exchange the token once at `/bootstrap` for a two-day `Secure`,
-`HttpOnly`, `SameSite=Strict` cookie; decision HTML never contains the secret.
-The wake client reads the same token from an owner-only state file and sends it
-as a bearer credential. Generate a device bootstrap link with:
+Browsers exchange the token once at `/bootstrap` for a `Secure`, `HttpOnly`,
+`SameSite=Strict` cookie whose two-day expiry is enforced by both browser and
+server; decision HTML never contains the secret. The wake client reads the same
+token from an owner-only state file and sends it as a bearer credential.
+Generate a device bootstrap link with:
 
 ```bash
+export ARACHNE_PUBLIC_URL=https://arachne.tail342046.ts.net
 bin/bootstrap-url.py --open decision_476_relationship_drift.html
 ```
 
@@ -57,8 +62,13 @@ bin/bootstrap-url.py --open decision_476_relationship_drift.html
   `tailscale serve` (never `funnel`) keeps it inside the tailnet.
 - **Authenticated at both boundaries.** Tailscale authenticates remote devices;
   the application token prevents another account on the shared host from using
-  host-wide loopback to read pages, read rulings, or forge one. It is neither
-  public nor unauthenticated.
+  host-wide loopback to read pages, read rulings, or forge one. Private-CA TLS
+  prevents a different process on that host from impersonating the loopback
+  backend to Tailscale Serve. It is neither public nor unauthenticated.
+- **Published pages are privileged code.** Only publish decision HTML from a
+  trusted source. A server-supplied Content Security Policy restricts remote
+  active content, framing, base URLs, and network connections, but it is defense
+  in depth rather than a sanitizer for arbitrary HTML/JavaScript.
 - **Featherweight, rootless, no prohibited category.** stdlib `http.server`,
   userspace `tailscaled`, no root, no LLM/mining/P2P/Tor. Well inside a shared
   seedbox's rules.
@@ -122,7 +132,9 @@ To make it always-on and reachable from your phone, follow [`DEPLOY.md`](./DEPLO
 ## Status
 
 Implemented with Python's standard library, flat-file atomic persistence, a
-condition-variable long poll, and a rootless watchdog. Target host: the Whatbox
-seedbox (`proteus.whatbox.ca`, tailnet `tail342046`). The design is host-agnostic
-— it can migrate to the home server (`edi-base`) once that node is back on the
-tailnet, changing nothing but the node name in the URL.
+condition-variable long poll, and a rootless watchdog. The temporary target is
+the Whatbox seedbox (`proteus.whatbox.ca`, tailnet `tail342046`). The application
+is host-agnostic, but moving it to the home server (`edi-base`) is a real
+deployment cutover: preserve ruling/cursor continuity, install destination TLS
+material, and adapt from a user-owned rootless Tailscale daemon to the host's
+system Tailscale service. See [`DEPLOY.md`](./DEPLOY.md).
