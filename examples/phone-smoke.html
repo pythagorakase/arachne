@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Arachne phone smoke test</title>
+  <style>
+    :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #17131f; color: #f7f1ff; }
+    main { box-sizing: border-box; width: min(38rem, calc(100% - 2rem)); padding: 2rem; border: 1px solid #70508f; border-radius: 1rem; background: #241b31; box-shadow: 0 1.5rem 4rem #0008; }
+    h1 { margin-top: 0; }
+    label { display: grid; gap: .5rem; margin: 1.5rem 0; }
+    textarea { box-sizing: border-box; width: 100%; min-height: 7rem; padding: .8rem; font: inherit; border: 1px solid #80669b; border-radius: .6rem; }
+    button { width: 100%; padding: .9rem; border: 0; border-radius: .6rem; background: #d6a6ff; color: #201229; font: 700 1rem/1 system-ui; }
+    button:disabled { opacity: .55; }
+    #status { min-height: 1.5em; margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Arachne phone smoke test</h1>
+    <p>This files a synthetic acceptance ruling only. It cannot alter a NEXUS design decision.</p>
+    <label>
+      Optional device note
+      <textarea id="note" placeholder="For example: iPhone over Tailscale"></textarea>
+    </label>
+    <button id="submit" type="button">File smoke ruling</button>
+    <p id="status" role="status" aria-live="polite"></p>
+  </main>
+  <script>
+    (function () {
+      "use strict";
+      var storageKey = "arachne-phone-smoke-note";
+      var note = document.getElementById("note");
+      var submit = document.getElementById("submit");
+      var status = document.getElementById("status");
+      try { note.value = localStorage.getItem(storageKey) || ""; } catch (_) {}
+      note.addEventListener("input", function () {
+        try { localStorage.setItem(storageKey, note.value); } catch (_) {}
+      });
+      submit.addEventListener("click", function () {
+        submit.disabled = true;
+        status.textContent = "Filing…";
+        fetch("/ruling", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            issue: "arachne-phone-smoke",
+            markdown: "# Arachne phone smoke test\n\n" + (note.value.trim() || "Submitted from an enrolled tailnet device."),
+            form: { test: "phone", note: note.value }
+          })
+        }).then(function (response) {
+          return response.text().then(function (body) {
+            if (!response.ok) throw new Error("HTTP " + response.status + ": " + body);
+            return JSON.parse(body);
+          });
+        }).then(function (ruling) {
+          status.textContent = "Filed sequence " + ruling.sequence + ". The waiter should be awake.";
+          try { localStorage.removeItem(storageKey); } catch (_) {}
+        }).catch(function (error) {
+          status.textContent = "Filing failed: " + error.message;
+          submit.disabled = false;
+        });
+      });
+    }());
+  </script>
+</body>
+</html>

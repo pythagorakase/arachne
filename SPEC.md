@@ -40,11 +40,19 @@ relax them for convenience.
 - **Tailnet-only exposure.** Reach it via `tailscale serve` (private, inside the
   tailnet, TLS). **Never `tailscale funnel`** and never a public reverse proxy —
   that would make it a public service.
-- **No unauthenticated public surface.** Authentication is the tailnet device
-  identity supplied by the transport; the app adds none, and must not be
-  reachable by anything off the tailnet. (This is also what keeps it clear of the
-  one Whatbox AUP clause that bites hosted services — "a public directory service
-  with no authentication.")
+- **Authenticated proxy-to-app hop.** Tailscale Serve connects to Arachne over
+  verified HTTPS using a private localhost CA. The Serve proxy trusts that CA;
+  Arachne holds the corresponding server key and certificate. A different user
+  merely claiming the loopback port must not be able to impersonate the backend
+  or receive forwarded cookies, bearer credentials, or bootstrap fragments.
+- **No unauthenticated sensitive surface.** Tailscale device identity gates the
+  remote transport, and an owner-only application token gates pages, rulings,
+  and waiters on the host-wide loopback interface. Browser sessions use a
+  server-validated, two-day `Secure`, `HttpOnly`, `SameSite=Strict` cookie; the
+  token is never embedded in published HTML. Expiry must be enforced by the
+  server, not only by the browser's cookie lifetime. Nothing may be reachable
+  off the tailnet. (This also keeps it clear of the one Whatbox AUP clause that
+  bites hosted services — "a public directory service with no authentication.")
 - **No directory listing / no traversal.** Serve only an explicit allowlist of
   page files from the pages directory. Never expose a filesystem index or allow
   `..` escapes.
@@ -54,11 +62,18 @@ relax them for convenience.
   never the primary mechanism.
 - **Durable, out-of-repo state.** Rulings are persisted durably, outside any
   application source repo.
-- **Lightweight & rootless.** No root; no runtime heavy enough to burden a shared
-  seedbox; none of the AUP-prohibited categories (LLM inference, mining, P2P
-  load-balancing, Tor). A stdlib-only footprint is the safe default.
+- **Lightweight & unprivileged application.** Arachne and its watchdog never run
+  as root and use no runtime heavy enough to burden a shared seedbox. A normal
+  host may use its existing root-managed system `tailscaled`; Arachne does not
+  own that daemon. None of the AUP-prohibited categories (LLM inference, mining,
+  P2P load-balancing, Tor) apply. A stdlib-only footprint is the safe default.
 - **Fail loud.** Errors surface (non-2xx + a diagnostic body / a real
   traceback). No silent fallbacks. *(Owner preference — honor it.)*
+- **Published pages are trusted privileged code.** A decision page is part of
+  the application, not untrusted user content. Publish only reviewed HTML/JS.
+  Apply a server-controlled Content Security Policy that restricts remote active
+  content, framing, base URLs, and network connections; treat it as defense in
+  depth, not as an HTML sanitizer.
 
 ---
 
@@ -82,6 +97,8 @@ keep, but not mandated.)
   `localStorage` (so a phone can resume mid-answer). The existing NEXUS pages
   (`nexus/temp/decision_*.html`) hardcode an absolute `127.0.0.1:8788` endpoint
   today; switching them to a relative path is the one change needed at publish.
+  The surrounding server session supplies authentication, so page source never
+  carries the application token.
 
 ---
 
@@ -133,9 +150,9 @@ monotonic and restart-safe.
 
 Sol owns these choices — pick what's cleanest:
 
-- **Language / framework** — within the lightweight & rootless invariant. stdlib
-  `http.server` is a fine default; asyncio or a micro-framework is fine if it
-  stays dependency-light and shared-host-friendly.
+- **Language / framework** — within the lightweight, unprivileged-application
+  invariant. stdlib `http.server` is a fine default; asyncio or a micro-framework
+  is fine if it stays dependency-light and shared-host-friendly.
 - **File/module layout** — single file or a small package.
 - **Wake transport** — per §4 latitude.
 - **Cursor representation** — per §4 latitude.
@@ -151,9 +168,16 @@ Sol owns these choices — pick what's cleanest:
 ## 6. Deployment constraints (detail in DEPLOY.md)
 
 - Exposed **tailnet-only** via `tailscale serve`, TLS, at a stable MagicDNS name
-  (`arachne.<tailnet>.ts.net`). Never `funnel`.
-- `tailscaled` runs **rootless in userspace-networking mode** (no TUN, no root);
-  it accepts inbound tailnet connections and proxies to the loopback port.
+  (`arachne.<tailnet>.ts.net`). Never `funnel`. The proxy target is verified
+  HTTPS using a private localhost CA; an insecure HTTPS target is not allowed.
+- On the shared seedbox, `tailscaled` runs **rootless in userspace-networking
+  mode** (no TUN, no root). On a normal Ubuntu destination such as `edi-base`,
+  use its system-managed `tailscaled` and grant the deployment account the
+  narrow Tailscale operator access needed to manage Serve. These are distinct
+  deployment topologies, not a node-name-only substitution.
+- Filesystem-permission isolation via a Unix socket is unavailable on the
+  seedbox because Tailscale 1.98.9 requires root/sudo for Serve Unix socket
+  targets. Private-CA verification supplies backend identity on loopback.
 - Enrolling the node is a **one-time human step** (a browser login authorizes the
   node into the tailnet). Flag it; don't try to automate it away.
 - The service **survives reboot** (supervised; mechanism is latitude).
@@ -166,8 +190,9 @@ Sol owns these choices — pick what's cleanest:
 service.)*
 
 1. **Health & boot** — service starts and reports liveness.
-2. **Page serve + hardening** — an allowlisted page returns; a path-traversal
-   attempt and an unknown name return 404; there is no directory index.
+2. **Page serve + hardening** — an allowlisted page returns with the server's
+   restrictive decision-page CSP; a path-traversal attempt and an unknown name
+   return 404; there is no directory index.
 3. **File a ruling** — a submission persists durable artifacts (record + form)
    and advances the cursor.
 4. **Push-wake (critical)** — arm a waiter, then submit a ruling from a browser;
@@ -184,14 +209,16 @@ service.)*
    shows no new open port.
 9. **End-to-end from a phone** — load a page over the tailnet URL with no login
    prompt, submit, and confirm the agent wakes.
+10. **Backend identity + session expiry** — Serve reaches Arachne through a
+    private-CA-verified HTTPS target and rejects an untrusted replacement
+    backend; a cryptographically valid but expired browser session is denied by
+    the server.
 
 ---
 
 ## 8. Out of scope (later)
 
 - A Cloudflare Access variant (only if a non-tailnet consumer ever needs in).
-- Migrating the host from the seedbox to `edi-base` once it rejoins the tailnet
-  (changes only the node name in the URL).
 - Concurrency beyond a single interview / single cursor.
 - Folding the ruling pipeline back into the NEXUS repo (kept out-of-repo by
   design).
