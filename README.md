@@ -118,6 +118,11 @@ loud if the page does not preserve in-progress state:
 bin/publish-page.py /path/to/decision_476_relationship_drift.html
 ```
 
+Successful `POST /ruling` responses retain the acknowledgement expected by the
+existing NEXUS decision pages: `{"ok": true, "filed": "<markdown file>"}`.
+The same response also includes the durable entry's sequence, timestamps,
+payload, and artifact metadata for newer clients.
+
 `examples/phone-smoke.html` is a deliberately synthetic page for the final
 phone-to-wake deployment check; it never files a real design ruling.
 
