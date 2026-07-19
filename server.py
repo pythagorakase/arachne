@@ -789,7 +789,17 @@ class ArachneHandler(BaseHTTPRequestHandler):
                 "'form' must be a JSON object",
             )
         entry = self.arachne.store.file(issue, markdown, form)
-        self._json(HTTPStatus.CREATED, entry)
+        acknowledgement = dict(entry)
+        # Existing NEXUS decision pages predate Arachne and treat these two
+        # fields as the success contract.  Keep the durable entry fields too,
+        # so newer clients can consume the sequence and artifact metadata.
+        acknowledgement.update(
+            {
+                "ok": True,
+                "filed": entry["artifacts"]["markdown"],
+            }
+        )
+        self._json(HTTPStatus.CREATED, acknowledgement)
 
     def _read_json_payload(self, endpoint: str, noun: str) -> Any:
         if self.headers.get("Transfer-Encoding") is not None:

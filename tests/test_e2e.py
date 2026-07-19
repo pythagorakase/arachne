@@ -249,6 +249,13 @@ class ArachneEndToEndTests(unittest.TestCase):
         )
         with urlopen(request, timeout=1) as response:
             self.assertEqual(response.status, 201)
+            acknowledgement = json.load(response)
+        self.assertIs(acknowledgement["ok"], True)
+        self.assertEqual(
+            acknowledgement["filed"],
+            acknowledgement["artifacts"]["markdown"],
+        )
+        self.assertEqual(acknowledgement["issue"], "browser-cookie")
 
     def test_file_ruling_persists_both_artifacts(self) -> None:
         status, entry = post_ruling(self.service.url, self.service.token)
