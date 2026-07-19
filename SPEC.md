@@ -139,6 +139,12 @@ client (backgrounded; harness wakes agent on its exit):
         else (204 / transient): reconnect
 ```
 
+Operational inspection must not impersonate consumption. An authenticated
+client may list summaries after a cursor or peek at a persisted ruling, but
+those reads must not change the cursor or alter what a subsequent waiter
+receives. Destructive backlog maintenance is a separate administrative action,
+not part of the decision or wake API.
+
 **Latitude:** any transport that yields a clean process-exit wake and is
 race-free is acceptable — long-poll, SSE, chunked stream, WebSocket bridged to a
 process exit, etc. The cursor may be an integer, a timestamp, a ULID — anything

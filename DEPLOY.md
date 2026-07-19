@@ -219,9 +219,10 @@ curl --fail https://localhost:8788/health
 ```
 
 An unauthenticated request made with `--cacert` to an allowlisted decision page,
-`/ruling`, or `/wait` must return `401`; `/health` deliberately remains a
-non-sensitive unauthenticated liveness signal. Confirm `tailscale serve status`
-shows `https://localhost:8788`, never an HTTP or insecure-TLS target.
+`/ruling`, `/rulings?since=0`, `/rulings/1`, or `/wait` must return `401`;
+`/health` deliberately remains a non-sensitive unauthenticated liveness signal.
+Confirm `tailscale serve status` shows `https://localhost:8788`, never an HTTP
+or insecure-TLS target.
 
 ## Host-policy compliance (for any support conversation)
 

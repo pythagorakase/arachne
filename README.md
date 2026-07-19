@@ -123,6 +123,18 @@ existing NEXUS decision pages: `{"ok": true, "filed": "<markdown file>"}`.
 The same response also includes the durable entry's sequence, timestamps,
 payload, and artifact metadata for newer clients.
 
+Before arming against an unfamiliar cursor, an authenticated agent can inspect
+the queued backlog without changing it:
+
+- `GET /rulings?since=N` returns `sequence`, `issue`, and `submitted_at`
+  summaries for every ruling after `N`, plus the store's latest sequence.
+- `GET /rulings/N` returns the complete persisted ruling at sequence `N`.
+
+These endpoints are read-only. They do not maintain or advance a server-side
+cursor, and a later `GET /wait?since=N` still returns the first ruling after
+that same cursor. Arachne deliberately exposes no HTTP deletion or reset
+operation; state cleanup remains an explicit deployment-administration task.
+
 `examples/phone-smoke.html` is a deliberately synthetic page for the final
 phone-to-wake deployment check; it never files a real design ruling.
 

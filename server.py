@@ -326,6 +326,8 @@ class RulingStore:
             try:
                 entry = json.loads(path.read_text(encoding="utf-8"))
                 sequence = entry["sequence"]
+                issue = entry["issue"]
+                submitted_at = entry["submitted_at"]
                 artifacts = entry["artifacts"]
                 markdown_name = artifacts["markdown"]
             except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
@@ -338,6 +340,10 @@ class RulingStore:
                 raise RuntimeError(f"invalid sequence in persisted ruling {path}")
             if sequence in by_sequence:
                 raise RuntimeError(f"duplicate persisted ruling sequence {sequence}")
+            if not isinstance(issue, str) or not issue:
+                raise RuntimeError(f"invalid issue in persisted ruling {path}")
+            if not isinstance(submitted_at, str) or not submitted_at:
+                raise RuntimeError(f"invalid submission time in persisted ruling {path}")
             if not isinstance(markdown_name, str):
                 raise RuntimeError(f"invalid markdown artifact in persisted ruling {path}")
             markdown_path = self.rulings_dir / Path(markdown_name).name
@@ -375,6 +381,31 @@ class RulingStore:
                 if remaining <= 0:
                     return None
                 self._condition.wait(remaining)
+
+    def summaries_after(self, cursor: int) -> tuple[int, list[dict[str, Any]]]:
+        """Return an atomic, read-only snapshot of rulings after *cursor*."""
+
+        with self._condition:
+            latest_sequence = self._entries[-1]["sequence"] if self._entries else 0
+            summaries = [
+                {
+                    "sequence": entry["sequence"],
+                    "issue": entry["issue"],
+                    "submitted_at": entry["submitted_at"],
+                }
+                for entry in self._entries
+                if entry["sequence"] > cursor
+            ]
+        return latest_sequence, summaries
+
+    def get(self, sequence: int) -> dict[str, Any] | None:
+        """Return a ruling without changing any waiter or client cursor state."""
+
+        with self._condition:
+            for entry in self._entries:
+                if entry["sequence"] == sequence:
+                    return dict(entry)
+        return None
 
     def file(self, issue: str, markdown: str, form: dict[str, Any]) -> dict[str, Any]:
         with self._condition:
@@ -625,6 +656,30 @@ class ArachneHandler(BaseHTTPRequestHandler):
             "provide a valid Arachne browser session or bearer token",
         )
 
+    def _parse_cursor(self, raw_query: str) -> int:
+        query = parse_qs(raw_query, keep_blank_values=True)
+        if set(query) != {"since"} or len(query["since"]) != 1:
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_cursor",
+                "provide exactly one non-negative integer 'since' cursor",
+            )
+        value = query["since"][0]
+        if re.fullmatch(r"[0-9]+", value) is None:
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_cursor",
+                "'since' must be a non-negative integer",
+            )
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_cursor",
+                "'since' must be a non-negative integer",
+            ) from exc
+
     def _get(self) -> None:
         parsed = urlsplit(self.path)
         path = unquote(parsed.path)
@@ -636,28 +691,7 @@ class ArachneHandler(BaseHTTPRequestHandler):
             return
         if path == "/wait":
             self._require_authentication()
-            query = parse_qs(parsed.query, keep_blank_values=True)
-            values = query.get("since")
-            if values is None or len(values) != 1:
-                raise ClientProblem(
-                    HTTPStatus.BAD_REQUEST,
-                    "invalid_cursor",
-                    "provide exactly one non-negative integer 'since' cursor",
-                )
-            try:
-                cursor = int(values[0])
-            except ValueError as exc:
-                raise ClientProblem(
-                    HTTPStatus.BAD_REQUEST,
-                    "invalid_cursor",
-                    "'since' must be a non-negative integer",
-                ) from exc
-            if cursor < 0:
-                raise ClientProblem(
-                    HTTPStatus.BAD_REQUEST,
-                    "invalid_cursor",
-                    "'since' must be a non-negative integer",
-                )
+            cursor = self._parse_cursor(parsed.query)
             entry = self.arachne.store.wait_after(
                 cursor, self.arachne.config.wait_seconds
             )
@@ -666,8 +700,50 @@ class ArachneHandler(BaseHTTPRequestHandler):
             else:
                 self._json(HTTPStatus.OK, entry)
             return
+        if path == "/rulings":
+            self._require_authentication()
+            cursor = self._parse_cursor(parsed.query)
+            latest_sequence, summaries = self.arachne.store.summaries_after(cursor)
+            self._json(
+                HTTPStatus.OK,
+                {
+                    "since": cursor,
+                    "latest_sequence": latest_sequence,
+                    "rulings": summaries,
+                },
+            )
+            return
+        if path.startswith("/rulings/"):
+            self._require_authentication()
+            self._serve_ruling(path, parsed.query)
+            return
         self._require_authentication()
         self._serve_page(path)
+
+    def _serve_ruling(self, path: str, raw_query: str) -> None:
+        sequence_text = path.removeprefix("/rulings/")
+        if raw_query or re.fullmatch(r"[1-9][0-9]*", sequence_text) is None:
+            raise ClientProblem(
+                HTTPStatus.NOT_FOUND,
+                "not_found",
+                "no such persisted ruling",
+            )
+        try:
+            sequence = int(sequence_text)
+        except ValueError as exc:
+            raise ClientProblem(
+                HTTPStatus.NOT_FOUND,
+                "not_found",
+                "no such persisted ruling",
+            ) from exc
+        entry = self.arachne.store.get(sequence)
+        if entry is None:
+            raise ClientProblem(
+                HTTPStatus.NOT_FOUND,
+                "not_found",
+                "no such persisted ruling",
+            )
+        self._json(HTTPStatus.OK, entry)
 
     def _page_candidate(self, name: str) -> Path:
         if not PAGE_NAME.fullmatch(name):
