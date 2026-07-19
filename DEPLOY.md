@@ -1,9 +1,9 @@
 # Arachne — Deployment Runbook
 
 How to make Arachne always-on and reachable from the owner's devices,
-tailnet-only. The current bridge deployment is the owner's MacBook; the durable
-destination is the Ubuntu host `edi-base`. The older Whatbox procedure remains
-below as a shared-host reference, but is not part of the current cutover.
+tailnet-only. The durable deployment is the Ubuntu host `cairn`; the MacBook
+bridge is retained only as rollback state. The older Whatbox procedure remains
+below as a shared-host reference, but is not part of the current deployment.
 
 Commands are **illustrative examples** — the supervision mechanism especially
 is the implementer's choice (see [`SPEC.md`](./SPEC.md) §5). What's fixed are
@@ -75,7 +75,7 @@ core's latest sequence. The sidecar has no durable state of its own.
 | Cron | `crontab` present (vixie cron — supports `@reboot`) |
 | curl / rsync | both present |
 | Tailscale | Static amd64 binaries in `~/bin`; rootless userspace daemon |
-| Tailnet | `tail342046` (owner's; existing nodes: `echo` = Mac, `edi-base` = offline, phone, tablet) |
+| Tailnet | `tail342046` (owner's; `echo` = Mac, `cairn` = Ubuntu, plus phone and tablet) |
 | Isolation | Shared host/network namespace; loopback is **not** a per-user trust boundary |
 
 ---
@@ -181,7 +181,7 @@ ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.
 ```
 Capture the printed URL and hand it to the owner. After they authorize:
 - In the admin console, **disable key expiry** for the `arachne` node so it
-  never silently drops off (this is exactly what happened to `edi-base`).
+  never silently drops off while unattended.
 
 ### 5. Expose it — tailnet-only, verified TLS on both hops
 ```bash
@@ -279,7 +279,7 @@ no public port; stdlib footprint (not resource-intensive); rootless; none of the
 prohibited categories (LLM/mining/P2P/Tor). Squarely within the Whatbox software
 rules and AUP.
 
-## Moving the MacBook bridge to `edi-base`
+## Moving the MacBook bridge to `cairn`
 
 The cutover has one durable application boundary: the complete
 `ARACHNE_DATA_DIR` (including `auth-token` and `rulings/`) plus every published
@@ -304,7 +304,7 @@ rulings nor cursors.
 The detailed continuity and rollback checks below also apply, substituting the
 MacBook for the seedbox wherever it is the source.
 
-## Moving from the seedbox to `edi-base`
+## Moving from the seedbox to `cairn`
 
 This is a stateful cutover, not a node-name substitution. The server's next
 sequence number is reconstructed from `rulings/`, while `arm-wake.sh` retains
@@ -315,7 +315,7 @@ destination behind an existing cursor can therefore suppress several wakes.
 
 - Install the checkout and a destination-specific `deployment.env`; do not copy
   the seedbox file unchanged. Point data, runtime, pages, Python, and TLS paths
-  at real `edi-base` locations.
+  at real `cairn` locations.
 - Install `uv`, run `uv sync --frozen`, and install the two checked-in user
   units from `deploy/systemd/`. Start the core before the MCP adapter.
 - Inventory the currently published HTML under the seedbox's `~/arachne/pages/`.
@@ -348,7 +348,7 @@ destination behind an existing cursor can therefore suppress several wakes.
   `ARACHNE_TLS_DIR`. Never copy that TLS directory with application state or
   replace verification with an insecure HTTPS target.
 
-For example, install this as the `edi-base` deployment user's owner-only
+For example, install this as the `cairn` deployment user's owner-only
 `~/.config/arachne/deployment.env`, replacing `/home/OWNER` with that user's
 actual home directory:
 
@@ -365,11 +365,11 @@ ARACHNE_TLS_KEY_FILE=/home/OWNER/.local/state/arachne-tls/server-key.pem
 ARACHNE_SYSTEM_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ARACHNE_MANAGE_TAILSCALED=false
 ARACHNE_URL=https://127.0.0.1:8788
-ARACHNE_PUBLIC_URL=https://edi-base.tail342046.ts.net
+ARACHNE_PUBLIC_URL=https://cairn.tail342046.ts.net:8444
 ARACHNE_CA_FILE=/home/OWNER/.local/state/arachne-tls/trust-bundle.pem
 ARACHNE_MCP_HOST=127.0.0.1
 ARACHNE_MCP_PORT=8790
-ARACHNE_MCP_ALLOWED_HOSTS=127.0.0.1:8790,localhost:8790,edi-base.tail342046.ts.net:8443
+ARACHNE_MCP_ALLOWED_HOSTS=127.0.0.1:8790,localhost:8790,cairn.tail342046.ts.net:8443
 ARACHNE_MCP_HEARTBEAT_SECONDS=30
 ARACHNE_REQUEST_TIMEOUT=570
 ARACHNE_MCP_PYTHON=/home/OWNER/arachne/.venv/bin/python
@@ -474,19 +474,19 @@ chmod 700 "$arachne_cutover_dir"
 rsync --archive seedbox:.local/state/arachne/ "$arachne_cutover_dir/state/"
 rsync --archive seedbox:arachne/pages/ "$arachne_cutover_dir/pages/"
 
-ssh edi-base 'test ! -e ~/.local/state/arachne-cutover-final && \
+ssh cairn 'test ! -e ~/.local/state/arachne-cutover-final && \
   install -d -m 700 ~/.local/state/arachne-cutover-final && \
   install -d -m 755 ~/arachne/pages'
 rsync --archive "$arachne_cutover_dir/state/" \
-  edi-base:.local/state/arachne-cutover-final/
-rsync --archive --delete "$arachne_cutover_dir/pages/" edi-base:arachne/pages/
+  cairn:.local/state/arachne-cutover-final/
+rsync --archive --delete "$arachne_cutover_dir/pages/" cairn:arachne/pages/
 rsync --archive --checksum --dry-run "$arachne_cutover_dir/state/" \
-  edi-base:.local/state/arachne-cutover-final/
+  cairn:.local/state/arachne-cutover-final/
 rsync --archive --delete --checksum --dry-run "$arachne_cutover_dir/pages/" \
-  edi-base:arachne/pages/
+  cairn:arachne/pages/
 ```
 
-Both dry runs must show no file differences. On `edi-base`, move any prior data
+Both dry runs must show no file differences. On `cairn`, move any prior data
 directory to a named backup, then rename `arachne-cutover-final` to `arachne`;
 do not merge a fresh final copy into an old live state tree. Verify the expected
 page names are regular, non-symlink HTML files before start. Keep the protected
@@ -495,7 +495,7 @@ printing or copying its `auth-token` elsewhere.
 
 ### 3. Start and prove continuity
 
-Start Arachne on `edi-base`, configure Serve to the verified target
+Start Arachne on `cairn`, configure Serve port 8444 to the verified target
 `https://localhost:8788`, and check all of the following before routing real
 decisions there:
 
@@ -513,7 +513,7 @@ session**, using the existing token and cursor files. Do not leave an old
 seedbox waiter parked in parallel:
 
 ```bash
-export ARACHNE_URL=https://edi-base.tail342046.ts.net
+export ARACHNE_URL=https://cairn.tail342046.ts.net:8444
 export ARACHNE_PUBLIC_URL=$ARACHNE_URL
 bin/arm-wake.sh &
 bin/bootstrap-url.py --open phone-smoke.html  # use the published smoke-page name

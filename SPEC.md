@@ -188,7 +188,7 @@ Sol owns these choices — pick what's cleanest:
   (`arachne.<tailnet>.ts.net`). Never `funnel`. The proxy target is verified
   HTTPS using a private localhost CA; an insecure HTTPS target is not allowed.
 - On the shared seedbox, `tailscaled` runs **rootless in userspace-networking
-  mode** (no TUN, no root). On a normal Ubuntu destination such as `edi-base`,
+  mode** (no TUN, no root). On a normal Ubuntu destination such as `cairn`,
   use its system-managed `tailscaled` and grant the deployment account the
   narrow Tailscale operator access needed to manage Serve. These are distinct
   deployment topologies, not a node-name-only substitution.
