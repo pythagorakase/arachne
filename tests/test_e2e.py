@@ -178,6 +178,8 @@ class ArachneEndToEndTests(unittest.TestCase):
         unauthenticated_requests = (
             Request(f"{self.service.url}/decision_476.html"),
             Request(f"{self.service.url}/wait?since=0"),
+            Request(f"{self.service.url}/rulings?since=0"),
+            Request(f"{self.service.url}/rulings/1"),
             Request(
                 f"{self.service.url}/ruling",
                 data=b"{}",
@@ -269,6 +271,87 @@ class ArachneEndToEndTests(unittest.TestCase):
         self.assertEqual(len(markdown_files), 1)
         self.assertEqual(json.loads(json_files[0].read_text())["sequence"], 1)
         self.assertIn("Choose the woven path", markdown_files[0].read_text())
+
+    def test_backlog_listing_and_peek_are_non_destructive(self) -> None:
+        _, first = post_ruling(self.service.url, self.service.token, "mock-smoke")
+        _, second = post_ruling(self.service.url, self.service.token, "real-decision")
+        self.service.restart()
+
+        status, backlog = get_json(
+            f"{self.service.url}/rulings?since=0", token=self.service.token
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(backlog["since"], 0)
+        self.assertEqual(backlog["latest_sequence"], second["sequence"])
+        self.assertEqual(
+            backlog["rulings"],
+            [
+                {
+                    "sequence": first["sequence"],
+                    "issue": "mock-smoke",
+                    "submitted_at": first["submitted_at"],
+                },
+                {
+                    "sequence": second["sequence"],
+                    "issue": "real-decision",
+                    "submitted_at": second["submitted_at"],
+                },
+            ],
+        )
+        self.assertNotIn("markdown", backlog["rulings"][0])
+        self.assertNotIn("form", backlog["rulings"][0])
+
+        status, remaining = get_json(
+            f"{self.service.url}/rulings?since={first['sequence']}",
+            token=self.service.token,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            [summary["sequence"] for summary in remaining["rulings"]],
+            [second["sequence"]],
+        )
+
+        status, peeked = get_json(
+            f"{self.service.url}/rulings/{first['sequence']}",
+            token=self.service.token,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            peeked,
+            {key: value for key, value in first.items() if key not in {"ok", "filed"}},
+        )
+
+        # Inspection cannot advance or otherwise mutate the wake cursor: asking
+        # from the same cursor still returns the first queued ruling.
+        status, waited = get_json(
+            f"{self.service.url}/wait?since=0", token=self.service.token
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(waited["sequence"], first["sequence"])
+
+    def test_backlog_inspection_validates_cursor_and_sequence(self) -> None:
+        invalid_listing_paths = (
+            "/rulings",
+            "/rulings?since=",
+            "/rulings?since=-1",
+            "/rulings?since=not-a-number",
+            "/rulings?since=0&since=1",
+            "/rulings?since=0&extra=1",
+        )
+        for path in invalid_listing_paths:
+            with self.subTest(path=path), self.assertRaises(HTTPError) as raised:
+                get_json(f"{self.service.url}{path}", token=self.service.token)
+            self.assertEqual(raised.exception.code, 400)
+            self.assertEqual(json.load(raised.exception)["error"], "invalid_cursor")
+
+        for path in ("/rulings/0", "/rulings/not-a-number", "/rulings/1/extra"):
+            with self.subTest(path=path), self.assertRaises(HTTPError) as raised:
+                get_json(f"{self.service.url}{path}", token=self.service.token)
+            self.assertEqual(raised.exception.code, 404)
+
+        with self.assertRaises(HTTPError) as raised:
+            get_json(f"{self.service.url}/rulings/1", token=self.service.token)
+        self.assertEqual(raised.exception.code, 404)
 
     def test_push_wake_and_parked_waiter_do_not_block_requests(self) -> None:
         with concurrent.futures.ThreadPoolExecutor() as pool:
