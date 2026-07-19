@@ -80,6 +80,12 @@ TAILSCALE_STATE_DIR=/home/sylvanmaestro/.tailscale
 TAILSCALE_SOCKET=/home/sylvanmaestro/.tailscale/tailscaled.sock
 ```
 
+`ARACHNE_PYTHON` may name a host-provided wrapper such as `/usr/bin/python3`.
+The watchdog asks that command for `sys.executable` and uses the returned
+absolute executable for both launch and exact process matching. This preserves
+the identity check on shared hosts whose wrapper replaces itself with a
+versioned interpreter path.
+
 `ARACHNE_SYSTEM_CA_BUNDLE` may override the system bundle path; the initializer
 otherwise detects common Linux/macOS locations. Run it once before enrollment:
 
@@ -283,6 +289,9 @@ ARACHNE_MANAGE_TAILSCALED=false
 TAILSCALE_BIN=/usr/bin/tailscale
 TAILSCALE_SOCKET=/var/run/tailscale/tailscaled.sock
 ```
+
+The same `sys.executable` resolution applies in system-daemon mode, including
+virtual environments and distribution-provided Python wrappers.
 
 System mode never launches or stops `tailscaled`; Ubuntu owns that lifecycle.
 The operator setting permits the unprivileged watchdog to inspect the system

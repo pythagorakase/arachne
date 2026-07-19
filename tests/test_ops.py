@@ -324,7 +324,7 @@ class KeepaliveConfigTests(unittest.TestCase):
             self.assertIn("deny group/other access", result.stderr)
 
     @unittest.skipUnless(shutil.which("openssl"), "openssl is required")
-    def test_system_daemon_mode_uses_verified_https_backend(self) -> None:
+    def test_python_wrapper_is_resolved_before_exact_process_matching(self) -> None:
         bundle = system_ca_bundle()
         if bundle is None:
             self.skipTest("system CA bundle is unavailable")
@@ -335,10 +335,21 @@ class KeepaliveConfigTests(unittest.TestCase):
             runtime = root / "runtime"
             runtime.mkdir()
             data = root / "data"
-            fake_python = mock_bin / "python"
-            fake_python.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
-            fake_python.chmod(0o755)
-            expected = f"{fake_python} {REPO}/server.py"
+            resolved_python = mock_bin / "python-real"
+            resolved_python.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            resolved_python.chmod(0o755)
+            python_wrapper = mock_bin / "python"
+            python_wrapper.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = \"-c\" ]; then\n"
+                "  printf '%s\\n' \"$ARACHNE_RESOLVED_PYTHON\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 98\n",
+                encoding="utf-8",
+            )
+            python_wrapper.chmod(0o755)
+            expected = f"{resolved_python} {REPO}/server.py"
             (mock_bin / "ps").write_text(
                 "#!/bin/sh\nprintf '%s\\n' \"$ARACHNE_EXPECTED_COMMAND\"\n",
                 encoding="utf-8",
@@ -363,7 +374,7 @@ class KeepaliveConfigTests(unittest.TestCase):
                         "ARACHNE_MANAGE_TAILSCALED=false",
                         f"ARACHNE_RUNTIME_DIR={runtime}",
                         f"ARACHNE_DATA_DIR={data}",
-                        f"ARACHNE_PYTHON={fake_python}",
+                        f"ARACHNE_PYTHON={python_wrapper}",
                         f"TAILSCALE_BIN={mock_bin / 'tailscale'}",
                         "TAILSCALE_SOCKET=/run/tailscale/tailscaled.sock",
                         f"ARACHNE_SYSTEM_CA_BUNDLE={bundle}",
@@ -384,6 +395,7 @@ class KeepaliveConfigTests(unittest.TestCase):
                     "PATH": f"{mock_bin}{os.pathsep}{os.environ['PATH']}",
                     "ARACHNE_DEPLOY_ENV": str(deploy),
                     "ARACHNE_EXPECTED_COMMAND": expected,
+                    "ARACHNE_RESOLVED_PYTHON": str(resolved_python),
                     "ARACHNE_CURL_LOG": str(curl_log),
                     "ARACHNE_TS_LOG": str(tailscale_log),
                     "ARACHNE_EVENT_LOG": str(event_log),

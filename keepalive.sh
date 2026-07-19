@@ -38,7 +38,7 @@ arachne_runtime=${ARACHNE_RUNTIME_DIR:-${arachne_state_root}/arachne-runtime}
 arachne_data=${ARACHNE_DATA_DIR:-${arachne_state_root}/arachne}
 arachne_pages=${ARACHNE_PAGES_DIR:-${arachne_root}/pages}
 arachne_port=${ARACHNE_PORT:-8788}
-arachne_python=${ARACHNE_PYTHON:-$(command -v python3)}
+arachne_python_configured=${ARACHNE_PYTHON:-$(command -v python3)}
 arachne_manage_tailscaled=${ARACHNE_MANAGE_TAILSCALED:-true}
 arachne_tailscale=${TAILSCALE_BIN:-${HOME}/bin/tailscale}
 arachne_tailscaled=${TAILSCALED_BIN:-${HOME}/bin/tailscaled}
@@ -71,8 +71,21 @@ if [[ ! "$arachne_port" =~ ^[0-9]+$ ]] || \
   printf 'Arachne: ARACHNE_PORT must be between 1 and 65535\n' >&2
   exit 2
 fi
-if [[ ! -x "$arachne_python" ]]; then
-  printf 'Arachne: Python executable is unavailable: %s\n' "$arachne_python" >&2
+if [[ ! -x "$arachne_python_configured" ]]; then
+  printf 'Arachne: Python executable is unavailable: %s\n' \
+    "$arachne_python_configured" >&2
+  exit 1
+fi
+# Some shared hosts expose Python through an exec-wrapper.  Resolve the
+# interpreter-reported executable before building the exact process identity;
+# otherwise a healthy child can have a different argv[0] than the configured
+# wrapper and the watchdog will reject its own process.
+if ! arachne_python=$("$arachne_python_configured" -c \
+    'import sys; print(sys.executable)' 2>/dev/null) || \
+    [[ "$arachne_python" != /* || "$arachne_python" == *$'\n'* || \
+       ! -x "$arachne_python" ]]; then
+  printf 'Arachne: configured Python did not resolve to an executable: %s\n' \
+    "$arachne_python_configured" >&2
   exit 1
 fi
 if [[ ! -x "$arachne_tailscale" ]]; then
