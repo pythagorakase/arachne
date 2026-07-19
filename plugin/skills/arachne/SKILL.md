@@ -31,18 +31,23 @@ tools (surfaced as `mcp__plugin_arachne_arachne__<tool>`):
 
 ## The Cursor
 
-The durable wake cursor lives at `~/.local/state/arachne/cursor` (shared with
-the shell client; missing file means `0`). Read it before waiting; write the
-`cursor` returned by `wait_for_ruling` back to the file **after acting on the
-ruling** — replaying a ruling is safe, losing one is not. Never hand-edit it
-otherwise.
+The durable wake cursor is shared with the shell client and resolved by the
+same rule as `bin/arm-wake.sh`: `$ARACHNE_CURSOR_FILE` if set, else
+`${XDG_STATE_HOME:-$HOME/.local/state}/arachne/cursor`. A missing file means
+`0`. Read it before waiting; write the `cursor` returned by `wait_for_ruling`
+back to the file **after acting on the ruling** — replaying a ruling is safe,
+losing one is not. Never hand-edit it otherwise.
 
 ## Workflow
 
 0. **Preflight** — call `status` with the current cursor as `since`. Expect
-   `health.ok: true`; the `backlog` block lists any rulings already queued
-   past your cursor (handle those first via `get_ruling`). On error, stop and
-   report: server, Tailscale, or token trouble — do not improvise fallbacks.
+   `health.ok: true`. If the `backlog` block lists rulings already queued past
+   your cursor, **drain them through `wait_for_ruling` first** — it returns
+   instantly while a queued ruling exists, and every consumption then comes
+   with an advancing `cursor` to persist after acting. `get_ruling` is a
+   read-only peek (re-reading, auditing); it advances nothing, so never use
+   it as the consumption path. On error, stop and report: server, Tailscale,
+   or token trouble — do not improvise fallbacks.
 1. **Author** a self-contained `decision_<slug>.html` per the page contract
    below.
 2. **Publish** with `publish_decision(name, html)`. Validation is
@@ -64,7 +69,8 @@ otherwise.
    the completing call IS the wake.
 5. **On wake** — act on `ruling` (`issue`, `markdown`, `form`,
    `submitted_at`), then persist the returned `cursor`. More decisions
-   pending? Re-check `status` and wait again with the new cursor.
+   pending? Wait again with the new cursor — each `wait_for_ruling` returns
+   instantly while the backlog is non-empty.
 
 ## Page Contract
 
@@ -88,10 +94,14 @@ otherwise.
 - **Permissions.** Unprompted auto-mode use requires
   `"mcp__plugin_arachne_arachne__*"` in `permissions.allow` (user settings).
   The `mcp__plugin_...` prefix is specific to plugin-bundled servers.
-- **Token.** The connect-time helper reads
-  `~/.local/state/arachne/auth-token` (override: `ARACHNE_TOKEN_FILE`, or set
-  it in `~/.config/arachne/env`). Missing or empty file → the server shows as
-  failed/disconnected. Copy it once from the server host and `chmod 600`.
+- **Token.** The connect-time helper resolves
+  `${XDG_STATE_HOME:-$HOME/.local/state}/arachne/auth-token` (override:
+  `ARACHNE_TOKEN_FILE`, or set it in `~/.config/arachne/env`). The token file
+  — and the config file, because it is sourced — must be owner-only
+  (`chmod 600`); the helper refuses group/other-accessible files, symlinks,
+  and tokens outside the server's `[A-Za-z0-9_-]{32,256}` grammar, and the
+  server then shows as failed/disconnected. Copy the token once from the
+  server host.
 - **Endpoint.** Defaults to the author's deployment; override with
   `ARACHNE_MCP_URL` in the environment that launches Claude Code.
 - **Replay safety.** `wait_for_ruling` with the same `since` returns the same

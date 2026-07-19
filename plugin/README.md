@@ -1,20 +1,25 @@
 # Arachne — Claude Code Plugin
 
-The thin Claude Code layer over the [Arachne decision loom](../README.md): it
+The thin Claude Code layer over the
+[Arachne decision loom](https://github.com/pythagorakase/arachne): it
 registers the shared MCP adapter (with your bearer token read locally at
 connect time — no secret ever ships in config) and installs the client skill
 that teaches the agent the publish → link → wait → wake workflow.
 
 The plugin is the *client* half only. Arachne is self-hosted: you run your own
-server on your own tailnet. Deploy that first ([`DEPLOY.md`](../DEPLOY.md),
-[`MCP.md`](../MCP.md)); install this after.
+server on your own tailnet. Deploy that first
+([`DEPLOY.md`](https://github.com/pythagorakase/arachne/blob/main/DEPLOY.md),
+[`MCP.md`](https://github.com/pythagorakase/arachne/blob/main/MCP.md));
+install this after.
 
 ## Prerequisites
 
 - A running Arachne deployment reachable over your tailnet, with the MCP
-  adapter served on its own HTTPS port (see `MCP.md`).
+  adapter served on its own HTTPS port (see `MCP.md` in the repo).
 - Tailscale connected on the machine running Claude Code.
-- The owner token copied once to this machine:
+- The owner token copied once to this machine (owner-only mode is enforced,
+  as is the server's token grammar; the default path honors
+  `XDG_STATE_HOME`):
 
   ```bash
   scp <host>:~/.local/state/arachne/auth-token ~/.local/state/arachne/auth-token
@@ -48,8 +53,9 @@ export ARACHNE_MCP_URL="https://<your-host>.<your-tailnet>.ts.net:8443/mcp"
 ```
 
 Token location can likewise be overridden with `ARACHNE_TOKEN_FILE`, either in
-the launch environment or in `~/.config/arachne/env` (the helper script reads
-that file when the variable is not already set).
+the launch environment or in `~/.config/arachne/env` (the helper script
+sources that file when the variable is not already set — and refuses to source
+it unless it is an owner-only regular file, since sourcing executes it).
 
 ## Permissions
 
