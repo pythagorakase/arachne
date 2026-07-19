@@ -30,6 +30,11 @@ from starlette.routing import Mount, Route
 AUTH_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,256}\Z")
 LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
+# Kept in step with the [project] version in pyproject.toml; the project is
+# not an installed distribution (tool.uv package = false), so the version
+# cannot be read from importlib metadata.
+ADAPTER_VERSION = "0.1.0"
+
 
 def _required_url(name: str, value: str | None, *, public: bool = False) -> str:
     if not value:
@@ -412,6 +417,12 @@ def create_app(settings: Settings) -> Starlette:
             allowed_origins=[],
         ),
     )
+    # mcp 1.28.1 exposes no FastMCP version parameter. Left unset, the SDK
+    # infers server_version from installed-package metadata at initialize
+    # time, and importlib.metadata.version() can return None there (absent or
+    # unreadable METADATA) — failing InitializationOptions validation and
+    # crashing every handshake before a response is written.
+    mcp._mcp_server.version = ADAPTER_VERSION
 
     @mcp.tool(annotations=annotations_read, structured_output=True)
     async def status(since: int = 0) -> dict[str, Any]:
