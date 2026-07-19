@@ -281,7 +281,7 @@ class ServerProtocolHardeningTests(unittest.TestCase):
             + huge_length
             + b"\r\n\r\n",
         )
-        self.assertIn(b"HTTP/1.1 413 Request Entity Too Large", post_response)
+        self.assertIn(b"HTTP/1.1 413 ", post_response)
         self.assertIn(b'"error": "payload_too_large"', post_response)
         self.assertIn(b"Connection: close", post_response)
 
