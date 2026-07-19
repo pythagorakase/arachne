@@ -1,0 +1,15 @@
+{
+  "name": "arachne",
+  "owner": {
+    "name": "pythagorakase"
+  },
+  "description": "Arachne decision loom — install the Claude Code client plugin straight from this repo.",
+  "plugins": [
+    {
+      "name": "arachne",
+      "source": "./plugin",
+      "description": "Rich asynchronous human decisions with same-session push-wake, over the shared Arachne MCP adapter.",
+      "category": "workflow"
+    }
+  ]
+}

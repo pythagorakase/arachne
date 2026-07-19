@@ -1,0 +1,18 @@
+{
+  "name": "arachne",
+  "displayName": "Arachne",
+  "description": "Client integration for the Arachne decision loom: publish rich HTML decisions, hand the human a one-tap link, and get woken in the same session when they rule — over the shared MCP adapter, no shell permissions required.",
+  "author": {
+    "name": "pythagorakase",
+    "url": "https://github.com/pythagorakase"
+  },
+  "homepage": "https://github.com/pythagorakase/arachne",
+  "repository": "https://github.com/pythagorakase/arachne",
+  "keywords": [
+    "decision",
+    "async",
+    "human-in-the-loop",
+    "mcp",
+    "tailscale"
+  ]
+}
