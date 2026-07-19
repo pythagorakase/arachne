@@ -1,0 +1,15 @@
+[Unit]
+Description=Arachne shared MCP adapter
+After=arachne.service
+Requires=arachne.service
+
+[Service]
+Type=simple
+Environment=ARACHNE_DEPLOY_ENV=%h/.config/arachne/deployment.env
+WorkingDirectory=%h/arachne
+ExecStart=%h/arachne/bin/run-configured-service.sh mcp
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

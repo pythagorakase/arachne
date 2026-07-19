@@ -8,7 +8,9 @@ human's devices, with no login friction.
 
 It is the "deluxe upgrade" to a plain `AskUserQuestion`: the agent publishes a
 decision page, the human rules asynchronously (phone, tablet, laptop), and the
-ruling pushes straight back into the agent's live session.
+ruling pushes straight back into the agent's live session. A shared MCP adapter
+exposes publication, bootstrap, inspection, and replay-safe waiting as named
+tools, so an agent does not need broad shell permission to use the loom.
 
 ## Why it exists
 
@@ -83,8 +85,11 @@ Full rationale, invariants, and implementer latitude are in [`SPEC.md`](./SPEC.m
 arachne/
   README.md        ← you are here: what & why
   SPEC.md          ← the spec: goal, invariants, behavior, latitude (the handoff)
-  DEPLOY.md        ← seedbox + Tailscale runbook (one human step, flagged)
+  DEPLOY.md        ← portable host + Tailscale deployment and migration runbook
+  MCP.md           ← shared MCP tools, authentication, and client setup
   server.py        ← the server (created by the implementer, per SPEC)
+  mcp_server.py    ← authenticated Streamable HTTP MCP adapter
+  page_contract.py ← shared validation and atomic publication boundary
   bin/arm-wake.sh  ← the agent-side wake loop (per SPEC)
   bin/bootstrap-url.py ← establishes an authenticated browser session
   bin/publish-page.py ← enforces relative POST + localStorage at publish
@@ -141,17 +146,18 @@ phone-to-wake deployment check; it never files a real design ruling.
 Run the acceptance suite with:
 
 ```bash
-python3 -m unittest discover -s tests -v
+uv sync --frozen
+uv run --frozen python -m unittest discover -s tests -v
 ```
 
 To make it always-on and reachable from your phone, follow [`DEPLOY.md`](./DEPLOY.md).
+To connect an agent harness without shell access, follow [`MCP.md`](./MCP.md).
 
 ## Status
 
-Implemented with Python's standard library, flat-file atomic persistence, a
-condition-variable long poll, and a rootless watchdog. The temporary target is
-the Whatbox seedbox (`proteus.whatbox.ca`, tailnet `tail342046`). The application
-is host-agnostic, but moving it to the home server (`edi-base`) is a real
-deployment cutover: preserve ruling/cursor continuity, install destination TLS
-material, and adapt from a user-owned rootless Tailscale daemon to the host's
-system Tailscale service. See [`DEPLOY.md`](./DEPLOY.md).
+The core uses Python's standard library, flat-file atomic persistence, and a
+condition-variable long poll. The sidecar uses the pinned official Python MCP
+SDK and keeps no durable cursor state. The application is host-agnostic, but
+moving the core remains a real deployment cutover: preserve ruling/cursor
+continuity, install destination TLS material, and adapt supervision and
+Tailscale ownership to the destination. See [`DEPLOY.md`](./DEPLOY.md).

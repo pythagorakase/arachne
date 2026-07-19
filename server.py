@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from page_contract import PAGE_NAME, publish_html
+
 
 LOGGER = logging.getLogger("arachne")
 LOOPBACK_HOST = "127.0.0.1"
@@ -39,11 +41,12 @@ MAX_REQUEST_BYTES = 1_048_576
 SESSION_COOKIE_NAME = "arachne_session"
 SESSION_COOKIE_SECONDS = 2 * 24 * 60 * 60
 SESSION_COOKIE_VERSION = "v1"
+BOOTSTRAP_TICKET_SECONDS = 5 * 60
 TLS_HANDSHAKE_TIMEOUT = 5
 MAX_CONNECTION_WORKERS = 32
-PAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.html\Z")
 ISSUE_SLUG = re.compile(r"[^A-Za-z0-9._-]+")
 AUTH_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,256}\Z")
+BOOTSTRAP_TICKET = re.compile(r"[A-Za-z0-9_-]{32,256}\Z")
 SESSION_SIGNATURE = re.compile(r"[0-9a-f]{64}\Z")
 DECISION_PAGE_CSP = (
     "default-src 'none'; "
@@ -245,6 +248,8 @@ class Authentication:
             )
         self._token = token
         self._session_key = token.encode("ascii")
+        self._ticket_lock = threading.Lock()
+        self._bootstrap_tickets: dict[str, tuple[str, int]] = {}
 
     def _session_signature(self, expires_at: int) -> str:
         message = f"arachne-browser-session-v1:{expires_at}".encode("ascii")
@@ -295,6 +300,38 @@ class Authentication:
         return self.accepts_bearer(handler.headers.get("Authorization")) or self.accepts_cookie(
             handler.headers.get("Cookie")
         )
+
+    def issue_bootstrap_ticket(self, page: str) -> tuple[str, int]:
+        """Create a short-lived, single-use browser bootstrap capability."""
+
+        now = int(time.time())
+        expires_at = now + BOOTSTRAP_TICKET_SECONDS
+        ticket = secrets.token_urlsafe(32)
+        with self._ticket_lock:
+            self._bootstrap_tickets = {
+                candidate: record
+                for candidate, record in self._bootstrap_tickets.items()
+                if record[1] > now
+            }
+            self._bootstrap_tickets[ticket] = (page, expires_at)
+        return ticket, expires_at
+
+    def consume_bootstrap_ticket(self, candidate: object, page: object) -> bool:
+        """Consume a valid ticket exactly once and only for its bound page."""
+
+        if (
+            not isinstance(candidate, str)
+            or BOOTSTRAP_TICKET.fullmatch(candidate) is None
+            or not isinstance(page, str)
+        ):
+            return False
+        now = int(time.time())
+        with self._ticket_lock:
+            record = self._bootstrap_tickets.pop(candidate, None)
+        if record is None:
+            return False
+        expected_page, expires_at = record
+        return expires_at > now and hmac.compare_digest(expected_page, page)
 
     def session_cookie(self, secure: bool) -> str:
         expires_at = int(time.time()) + SESSION_COOKIE_SECONDS
@@ -656,6 +693,17 @@ class ArachneHandler(BaseHTTPRequestHandler):
             "provide a valid Arachne browser session or bearer token",
         )
 
+    def _require_bearer_authentication(self) -> None:
+        if self.arachne.authentication.accepts_bearer(
+            self.headers.get("Authorization")
+        ):
+            return
+        raise ClientProblem(
+            HTTPStatus.UNAUTHORIZED,
+            "bearer_authentication_required",
+            "provide the owner Arachne bearer token",
+        )
+
     def _parse_cursor(self, raw_query: str) -> int:
         query = parse_qs(raw_query, keep_blank_values=True)
         if set(query) != {"since"} or len(query["since"]) != 1:
@@ -772,6 +820,7 @@ class ArachneHandler(BaseHTTPRequestHandler):
         name = query["next"][0].removeprefix("/")
         self._page_candidate(name)
         destination = json.dumps(f"/{name}")
+        page = json.dumps(name)
         body = f"""<!doctype html>
 <meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
@@ -780,13 +829,18 @@ class ArachneHandler(BaseHTTPRequestHandler):
 <script>
 (async () => {{
   const status = document.getElementById('status');
-  const token = new URLSearchParams(location.hash.slice(1)).get('token');
-  if (!token) {{ status.textContent = 'This Arachne link is missing its token.'; return; }}
+  const secrets = new URLSearchParams(location.hash.slice(1));
+  const token = secrets.get('token');
+  const ticket = secrets.get('ticket');
+  if ((!token && !ticket) || (token && ticket)) {{
+    status.textContent = 'This Arachne link is missing or has conflicting credentials.';
+    return;
+  }}
   history.replaceState(null, '', location.pathname + location.search);
   const response = await fetch('/session', {{
     method: 'POST',
     headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify({{token}}),
+    body: JSON.stringify(token ? {{token}} : {{ticket, page: {page}}}),
   }});
   if (!response.ok) {{ status.textContent = 'This Arachne link is invalid or expired.'; return; }}
   location.replace({destination});
@@ -826,6 +880,14 @@ class ArachneHandler(BaseHTTPRequestHandler):
         path = unquote(parsed.path)
         if path == "/session" and not parsed.query:
             self._establish_session()
+            return
+        if path == "/bootstrap-ticket" and not parsed.query:
+            self._require_bearer_authentication()
+            self._issue_bootstrap_ticket()
+            return
+        if path == "/pages" and not parsed.query:
+            self._require_bearer_authentication()
+            self._publish_page()
             return
         if path != "/ruling" or parsed.query:
             raise ClientProblem(
@@ -876,6 +938,63 @@ class ArachneHandler(BaseHTTPRequestHandler):
             }
         )
         self._json(HTTPStatus.CREATED, acknowledgement)
+
+    def _issue_bootstrap_ticket(self) -> None:
+        payload = self._read_json_payload(
+            "POST /bootstrap-ticket", "bootstrap ticket"
+        )
+        if not isinstance(payload, dict) or set(payload) != {"page"}:
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_bootstrap_ticket",
+                "the bootstrap ticket request must contain only a page",
+            )
+        page = payload["page"]
+        if not isinstance(page, str):
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_bootstrap_ticket",
+                "'page' must name a published decision page",
+            )
+        self._page_candidate(page)
+        ticket, expires_at = self.arachne.authentication.issue_bootstrap_ticket(page)
+        self._json(
+            HTTPStatus.CREATED,
+            {"ticket": ticket, "expires_at": expires_at, "page": page},
+        )
+
+    def _publish_page(self) -> None:
+        payload = self._read_json_payload("POST /pages", "decision page")
+        if not isinstance(payload, dict) or set(payload) != {"name", "html"}:
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_page",
+                "the publication request must contain only name and html",
+            )
+        name = payload["name"]
+        html = payload["html"]
+        if not isinstance(name, str) or not isinstance(html, str):
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_page",
+                "'name' and 'html' must be strings",
+            )
+        try:
+            publication = publish_html(name, html, self.arachne.config.pages_dir)
+        except ValueError as exc:
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_page",
+                str(exc),
+            ) from exc
+        self._json(
+            HTTPStatus.CREATED,
+            {
+                "ok": True,
+                "page": publication.name,
+                "rewritten_references": publication.replacements,
+            },
+        )
 
     def _read_json_payload(self, endpoint: str, noun: str) -> Any:
         if self.headers.get("Transfer-Encoding") is not None:
@@ -946,17 +1065,34 @@ class ArachneHandler(BaseHTTPRequestHandler):
 
     def _establish_session(self) -> None:
         payload = self._read_json_payload("POST /session", "session")
-        if not isinstance(payload, dict) or set(payload) != {"token"}:
+        if not isinstance(payload, dict):
             raise ClientProblem(
                 HTTPStatus.BAD_REQUEST,
                 "invalid_session",
-                "the session request must contain only a token",
+                "the session request must contain a token or one-time ticket",
             )
-        if not self.arachne.authentication.accepts_token(payload["token"]):
+        if set(payload) == {"token"}:
+            accepted = self.arachne.authentication.accepts_token(payload["token"])
+        elif set(payload) == {"ticket", "page"}:
+            page = payload["page"]
+            if not isinstance(page, str):
+                accepted = False
+            else:
+                self._page_candidate(page)
+                accepted = self.arachne.authentication.consume_bootstrap_ticket(
+                    payload["ticket"], page
+                )
+        else:
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_session",
+                "the session request must contain only token, or ticket and page",
+            )
+        if not accepted:
             raise ClientProblem(
                 HTTPStatus.UNAUTHORIZED,
-                "invalid_token",
-                "the Arachne bootstrap token is invalid",
+                "invalid_credential",
+                "the Arachne bootstrap credential is invalid or expired",
             )
         self._write(
             HTTPStatus.NO_CONTENT,

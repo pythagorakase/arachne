@@ -12,5 +12,6 @@ rulings/
 auth-token
 
 # Local test and tooling state.
+.venv/
 .coverage
 .pytest_cache/
