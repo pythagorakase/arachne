@@ -1,17 +1,64 @@
 # Arachne — Deployment Runbook
 
-How to make Arachne always-on and reachable from the owner's devices, on the
-Whatbox seedbox, tailnet-only. Commands are **illustrative examples** — the
-supervision mechanism especially is the implementer's choice (see
-[`SPEC.md`](./SPEC.md) §5). What's fixed are the invariants (§2 there):
-loopback-only bind, `tailscale serve` not `funnel`, application authentication
-on shared-host loopback, verified HTTPS from Serve to Arachne using a private
-localhost CA, and supervised restart. The seedbox daemon is rootless; Ubuntu
-uses its system daemon.
+How to make Arachne always-on and reachable from the owner's devices,
+tailnet-only. The current bridge deployment is the owner's MacBook; the durable
+destination is the Ubuntu host `edi-base`. The older Whatbox procedure remains
+below as a shared-host reference, but is not part of the current cutover.
+
+Commands are **illustrative examples** — the supervision mechanism especially
+is the implementer's choice (see [`SPEC.md`](./SPEC.md) §5). What's fixed are
+the invariants (§2 there): loopback-only bind, `tailscale serve` not `funnel`,
+application authentication, and supervised restart. A shared host additionally
+requires verified HTTPS from Serve to Arachne using a private localhost CA.
+The personal MacBook may temporarily use same-user loopback HTTP behind
+Tailscale TLS; Ubuntu should restore the verified private-CA backend.
 
 > **One human step, flagged.** Enrolling the node into the tailnet requires a
 > browser login (`tailscale up` prints a URL the owner must visit). This is the
 > only step that can't be scripted — do not try to automate it away.
+
+---
+
+## Current MacBook bridge
+
+Use one owner-only `~/.config/arachne/deployment.env` for both the core and MCP
+adapter. Avoid ports already occupied by an older local decision server. For
+the current checkout, a representative configuration is:
+
+```dotenv
+ARACHNE_RUNTIME_DIR=/Users/OWNER/.local/state/arachne-runtime
+ARACHNE_DATA_DIR=/Users/OWNER/.local/state/arachne
+ARACHNE_PAGES_DIR=/Users/OWNER/arachne/pages
+ARACHNE_TOKEN_FILE=/Users/OWNER/.local/state/arachne/auth-token
+ARACHNE_PORT=8878
+ARACHNE_PYTHON=/Users/OWNER/arachne/.venv/bin/python
+ARACHNE_SECURE_COOKIE=true
+ARACHNE_WAIT_SECONDS=540
+ARACHNE_URL=http://127.0.0.1:8878
+ARACHNE_PUBLIC_URL=https://MAC.tailnet-name.ts.net
+ARACHNE_MCP_HOST=127.0.0.1
+ARACHNE_MCP_PORT=8879
+ARACHNE_MCP_ALLOWED_HOSTS=127.0.0.1:8879,localhost:8879,MAC.tailnet-name.ts.net:8443
+ARACHNE_MCP_HEARTBEAT_SECONDS=30
+ARACHNE_REQUEST_TIMEOUT=570
+ARACHNE_MCP_PYTHON=/Users/OWNER/arachne/.venv/bin/python
+```
+
+Run `uv sync --frozen`, create the runtime directory, and restrict both the
+environment and token to mode `0600`. Render the templates under
+`deploy/macos/` into `~/Library/LaunchAgents/`, replacing their three absolute
+path placeholders, then bootstrap both labels with `launchctl`. Expose the core
+and MCP listeners through distinct Tailscale HTTPS ports:
+
+```bash
+tailscale serve --bg --yes http://127.0.0.1:8878
+tailscale serve --bg --yes --https=8443 http://127.0.0.1:8879
+```
+
+Do not use Funnel or expose either process on a LAN/public bind. Agent harnesses
+use the tailnet HTTPS MCP endpoint with its additional bearer credential; see
+[`MCP.md`](./MCP.md). Before migration, stop both LaunchAgents and record the
+core's latest sequence. The sidecar has no durable state of its own.
 
 ---
 
@@ -232,7 +279,32 @@ no public port; stdlib footprint (not resource-intensive); rootless; none of the
 prohibited categories (LLM/mining/P2P/Tor). Squarely within the Whatbox software
 rules and AUP.
 
-## Moving to `edi-base`
+## Moving the MacBook bridge to `edi-base`
+
+The cutover has one durable application boundary: the complete
+`ARACHNE_DATA_DIR` (including `auth-token` and `rulings/`) plus every published
+file in `ARACHNE_PAGES_DIR`. Preserve modes. The MCP adapter stores neither
+rulings nor cursors.
+
+1. Prepare the Ubuntu checkout, virtual environment, destination TLS identity,
+   owner-only environment, user-systemd units, and Tailscale Serve config
+   without starting Arachne.
+2. Stop any active waiter in its agent session without advancing its external
+   cursor. Stop both Mac LaunchAgents and confirm ports 8878 and 8879 are no
+   longer listening.
+3. Record `latest_sequence` from the stopped source, then transfer the complete
+   data and pages directories with ownership and modes preserved. Do not copy
+   the Mac runtime directory or destination TLS keys.
+4. Start `arachne.service`; verify health, the recorded sequence, and one known
+   page. Start `arachne-mcp.service`; call `status` with the existing cursor.
+5. Point Tailscale Serve at the verified Ubuntu HTTPS backend, update client
+   `ARACHNE_PUBLIC_URL`/MCP registration if the hostname changed, and re-arm the
+   waiter from the same cursor. Do not accept rulings on both hosts at once.
+
+The detailed continuity and rollback checks below also apply, substituting the
+MacBook for the seedbox wherever it is the source.
+
+## Moving from the seedbox to `edi-base`
 
 This is a stateful cutover, not a node-name substitution. The server's next
 sequence number is reconstructed from `rulings/`, while `arm-wake.sh` retains
@@ -244,6 +316,8 @@ destination behind an existing cursor can therefore suppress several wakes.
 - Install the checkout and a destination-specific `deployment.env`; do not copy
   the seedbox file unchanged. Point data, runtime, pages, Python, and TLS paths
   at real `edi-base` locations.
+- Install `uv`, run `uv sync --frozen`, and install the two checked-in user
+  units from `deploy/systemd/`. Start the core before the MCP adapter.
 - Inventory the currently published HTML under the seedbox's `~/arachne/pages/`.
   Those files are runtime content and deliberately git-ignored, so the checkout
   alone is not a page backup.
@@ -282,11 +356,23 @@ actual home directory:
 ARACHNE_RUNTIME_DIR=/home/OWNER/.local/state/arachne-runtime
 ARACHNE_DATA_DIR=/home/OWNER/.local/state/arachne
 ARACHNE_PAGES_DIR=/home/OWNER/arachne/pages
+ARACHNE_TOKEN_FILE=/home/OWNER/.local/state/arachne/auth-token
 ARACHNE_PORT=8788
-ARACHNE_PYTHON=/usr/bin/python3
+ARACHNE_PYTHON=/home/OWNER/arachne/.venv/bin/python
 ARACHNE_TLS_DIR=/home/OWNER/.local/state/arachne-tls
+ARACHNE_TLS_CERT_FILE=/home/OWNER/.local/state/arachne-tls/server-cert.pem
+ARACHNE_TLS_KEY_FILE=/home/OWNER/.local/state/arachne-tls/server-key.pem
 ARACHNE_SYSTEM_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ARACHNE_MANAGE_TAILSCALED=false
+ARACHNE_URL=https://127.0.0.1:8788
+ARACHNE_PUBLIC_URL=https://edi-base.tail342046.ts.net
+ARACHNE_CA_FILE=/home/OWNER/.local/state/arachne-tls/trust-bundle.pem
+ARACHNE_MCP_HOST=127.0.0.1
+ARACHNE_MCP_PORT=8790
+ARACHNE_MCP_ALLOWED_HOSTS=127.0.0.1:8790,localhost:8790,edi-base.tail342046.ts.net:8443
+ARACHNE_MCP_HEARTBEAT_SECONDS=30
+ARACHNE_REQUEST_TIMEOUT=570
+ARACHNE_MCP_PYTHON=/home/OWNER/arachne/.venv/bin/python
 TAILSCALE_BIN=/usr/bin/tailscale
 TAILSCALE_SOCKET=/var/run/tailscale/tailscaled.sock
 ```
@@ -296,7 +382,9 @@ virtual environments and distribution-provided Python wrappers.
 
 System mode never launches or stops `tailscaled`; Ubuntu owns that lifecycle.
 The operator setting permits the unprivileged watchdog to inspect the system
-daemon and configure Serve through its socket.
+daemon and configure Serve through its socket. The MCP unit keeps no durable
+cursor database; `ARACHNE_DATA_DIR`, `ARACHNE_PAGES_DIR`, and the external
+client cursor are the continuity boundary.
 
 ### 2. Warm-copy, then quiesce the source
 

@@ -130,6 +130,19 @@ def post_ruling(url: str, token: str, issue: str = "476") -> tuple[int, dict]:
         return response.status, json.load(response)
 
 
+def post_json(url: str, path: str, token: str, payload: dict) -> tuple[int, dict]:
+    body = json.dumps(payload).encode()
+    request = Request(
+        f"{url}{path}",
+        data=body,
+        headers={"Content-Type": "application/json", **bearer(token)},
+        method="POST",
+    )
+    with urlopen(request, timeout=3) as response:
+        data = response.read()
+        return response.status, json.loads(data) if data else {}
+
+
 class ArachneEndToEndTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -180,6 +193,18 @@ class ArachneEndToEndTests(unittest.TestCase):
             Request(f"{self.service.url}/wait?since=0"),
             Request(f"{self.service.url}/rulings?since=0"),
             Request(f"{self.service.url}/rulings/1"),
+            Request(
+                f"{self.service.url}/pages",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            ),
+            Request(
+                f"{self.service.url}/bootstrap-ticket",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            ),
             Request(
                 f"{self.service.url}/ruling",
                 data=b"{}",
@@ -258,6 +283,86 @@ class ArachneEndToEndTests(unittest.TestCase):
             acknowledgement["artifacts"]["markdown"],
         )
         self.assertEqual(acknowledgement["issue"], "browser-cookie")
+
+        for path, payload in (
+            ("/pages", {"name": "decision_cookie.html", "html": "ignored"}),
+            ("/bootstrap-ticket", {"page": "decision_476.html"}),
+        ):
+            body = json.dumps(payload).encode()
+            request = Request(
+                f"{self.service.url}{path}",
+                data=body,
+                headers={"Content-Type": "application/json", "Cookie": cookie},
+                method="POST",
+            )
+            with self.subTest(path=path), self.assertRaises(HTTPError) as raised:
+                urlopen(request, timeout=1)
+            self.assertEqual(raised.exception.code, 401)
+
+    def test_bearer_publication_and_one_time_bootstrap_ticket(self) -> None:
+        source = """<!doctype html><script>
+        localStorage.setItem('draft', 'yes');
+        fetch('http://127.0.0.1:8788/ruling', {method: 'POST'});
+        </script>"""
+        status, published = post_json(
+            self.service.url,
+            "/pages",
+            self.service.token,
+            {"name": "decision_mcp.html", "html": source},
+        )
+        self.assertEqual(status, 201)
+        self.assertIs(published["ok"], True)
+        self.assertEqual(published["page"], "decision_mcp.html")
+        self.assertGreater(published["rewritten_references"], 0)
+        self.assertNotIn(str(self.pages), json.dumps(published))
+
+        with urlopen(
+            Request(
+                f"{self.service.url}/decision_mcp.html",
+                headers=bearer(self.service.token),
+            )
+        ) as response:
+            html = response.read().decode()
+        self.assertIn("fetch('/ruling'", html)
+        self.assertNotIn("127.0.0.1", html)
+
+        status, bootstrap = post_json(
+            self.service.url,
+            "/bootstrap-ticket",
+            self.service.token,
+            {"page": "decision_mcp.html"},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(bootstrap["page"], "decision_mcp.html")
+        self.assertNotEqual(bootstrap["ticket"], self.service.token)
+        self.assertNotIn(self.service.token, json.dumps(bootstrap))
+
+        session_body = json.dumps(
+            {"ticket": bootstrap["ticket"], "page": "decision_mcp.html"}
+        ).encode()
+        request = Request(
+            f"{self.service.url}/session",
+            data=session_body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=1) as response:
+            self.assertEqual(response.status, 204)
+            self.assertIn("arachne_session=", response.headers["Set-Cookie"])
+
+        with self.assertRaises(HTTPError) as reused:
+            urlopen(request, timeout=1)
+        self.assertEqual(reused.exception.code, 401)
+
+        with self.assertRaises(HTTPError) as invalid_page:
+            post_json(
+                self.service.url,
+                "/pages",
+                self.service.token,
+                {"name": "decision_invalid.html", "html": "<p>No contract</p>"},
+            )
+        self.assertEqual(invalid_page.exception.code, 400)
+        self.assertFalse((self.pages / "decision_invalid.html").exists())
 
     def test_file_ruling_persists_both_artifacts(self) -> None:
         status, entry = post_ruling(self.service.url, self.service.token)

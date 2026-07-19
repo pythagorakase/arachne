@@ -1,0 +1,14 @@
+[Unit]
+Description=Arachne decision loom
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=ARACHNE_DEPLOY_ENV=%h/.config/arachne/deployment.env
+WorkingDirectory=%h/arachne
+ExecStart=%h/arachne/bin/run-configured-service.sh server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

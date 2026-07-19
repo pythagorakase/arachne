@@ -150,6 +150,17 @@ race-free is acceptable — long-poll, SSE, chunked stream, WebSocket bridged to
 process exit, etc. The cursor may be an integer, a timestamp, a ULID — anything
 monotonic and restart-safe.
 
+An MCP transport must preserve that contract rather than hide it: the wait tool
+takes an explicit cursor, returns the advancing cursor with the ruling, and
+emits progress notifications frequently enough to keep a live human wait from
+looking like an idle or wedged tool call. Repeating a wait with the same cursor
+must replay the same first unseen ruling.
+
+Decision-page publication is also an authenticated server capability. Remote
+tooling sends trusted HTML to the server-side publication boundary, which
+enforces the canonical page contract and commits atomically; it must not rely
+on shelling out to `rsync` or on granting the harness general filesystem access.
+
 ---
 
 ## 5. Implementer's latitude (explicit)
