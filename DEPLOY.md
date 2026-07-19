@@ -293,8 +293,9 @@ daemon and configure Serve through its socket.
 An optional warm copy can reduce downtime, but it is not the cutover copy. Copy
 the **entire** `~/.local/state/arachne/` tree, including `auth-token` and every
 file under `rulings/`, while preserving modes. In the same agent session that
-will continue after cutover, terminate any currently armed `arm-wake.sh` child
-that targets the seedbox; do not edit or advance its persisted cursor.
+will continue after cutover, terminate and wait for every currently armed
+`arm-wake.sh` child that targets the seedbox; do not edit or advance its
+persisted cursor.
 
 Because form drafts live in origin-scoped browser `localStorage`, also confirm
 there is no unfinished answer at the old seedbox hostname. Finish it before the
@@ -322,7 +323,8 @@ ssh seedbox '
 '
 ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock serve reset'
 
-# With remote writes cut off, record latest_sequence in the cutover notes.
+# This is only a final liveness check. Record latest_sequence after the exact
+# server process has stopped so an already-admitted request cannot race it.
 ssh seedbox 'curl --fail --silent \
   --cacert ~/.local/state/arachne-tls/ca-cert.pem \
   https://localhost:8788/health'
@@ -354,6 +356,14 @@ ssh seedbox '
     exit 1
   fi
 '
+```
+
+With the exact server stopped, load the committed store once and record its
+final sequence in the cutover notes. This also re-validates every committed
+ruling before it is copied:
+
+```bash
+ssh seedbox "cd ~/arachne && python3 -c 'from pathlib import Path; from server import RulingStore; print(RulingStore(Path.home() / \".local/state/arachne\").latest_sequence)'"
 ```
 
 After the source is quiescent, make the mandatory final copy through an
@@ -435,16 +445,32 @@ Only after the destination passes the continuity test:
 5. Retain the quiescent seedbox state as a rollback copy until the home service
    has survived the agreed observation window; deletion is a separate action.
 
-For a rollback, first quiesce the destination with the same sentinel/lock
-procedure and reset its Serve mapping. If any destination ruling advanced the
-sequence—even the smoke ruling—reverse-sync the destination's complete app state
-and published pages into a fresh seedbox staging directory, verify checksums,
-and atomically replace the seedbox state before removing its `QUIESCED` sentinel.
-Only then reinstall seedbox cron, restore both agent-side endpoint variables,
-and re-arm the existing cursor. The narrower alternative (discarding destination
-state and lowering/reconciling the cursor) is allowed only after proving every
-discarded sequence was synthetic and never consumed as a real decision. Never
-run both origins as writable services against one cursor.
+For a rollback, make the destination fully quiescent before copying anything:
+
+1. In the same agent session, terminate and wait for every `arm-wake.sh` child
+   targeting the destination. Do not edit or advance its persisted cursor.
+2. Finish, explicitly abandon, or export every unfinished browser draft at the
+   destination hostname; its origin-scoped `localStorage` cannot follow the
+   rollback automatically.
+3. Create the destination `QUIESCED` sentinel, remove its Arachne cron entries,
+   and wait for the watchdog lock exactly as in the source procedure above.
+4. Reset the destination Serve mapping, then stop only the exact destination
+   Arachne PID using the same executable-and-arguments identity check shown
+   above, adapted to its deployment paths. Do not copy while its listener is
+   alive.
+5. With the process stopped, load `RulingStore` from the destination data path
+   and record the final committed sequence. This is the rollback source of
+   truth, not an earlier health response.
+
+If any destination ruling advanced that final sequence—even the smoke ruling—
+reverse-sync the destination's complete app state and published pages into a
+fresh seedbox staging directory, verify checksums, and atomically replace the
+seedbox state before removing its `QUIESCED` sentinel. Only then reinstall
+seedbox cron, restore both agent-side endpoint variables, and re-arm the existing
+cursor. The narrower alternative (discarding destination state and
+lowering/reconciling the cursor) is allowed only after proving every discarded
+sequence was synthetic and never consumed as a real decision. Never run both
+origins as writable services against one cursor.
 
 ```bash
 ssh seedbox '~/bin/tailscale --socket=/home/sylvanmaestro/.tailscale/tailscaled.sock serve reset'
