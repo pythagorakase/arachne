@@ -43,4 +43,4 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes shellcheck
 
       - name: Check shell entry points
-        run: shellcheck bin/*.sh keepalive.sh
+        run: shellcheck bin/*.sh plugin/bin/*.sh keepalive.sh

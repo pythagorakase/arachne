@@ -97,6 +97,8 @@ arachne/
   keepalive.sh     ← cron health-check / restart (per DEPLOY)
   pages/           ← served decision pages (content; git-ignored by default)
   tests/           ← real-process end-to-end acceptance tests
+  .claude-plugin/  ← marketplace manifest: this repo installs as a plugin source
+  plugin/          ← Claude Code plugin (MCP registration + client skill)
 ```
 
 Rulings, the generated authentication token, and wake cursors live outside the
@@ -152,6 +154,8 @@ uv run --frozen python -m unittest discover -s tests -v
 
 To make it always-on and reachable from your phone, follow [`DEPLOY.md`](./DEPLOY.md).
 To connect an agent harness without shell access, follow [`MCP.md`](./MCP.md).
+Claude Code users can install the client integration in one step — see
+[`plugin/README.md`](./plugin/README.md).
 
 ## Status
 

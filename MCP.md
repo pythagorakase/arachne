@@ -2,8 +2,9 @@
 
 `mcp_server.py` exposes Arachne as one authenticated Streamable HTTP MCP
 server. The wire server is harness-neutral: Codex and Claude Code can use the
-same endpoint and tool contract. Harness-specific plugin packaging is
-deliberately deferred; it is not required to use the server directly.
+same endpoint and tool contract. A thin Claude Code plugin under `plugin/`
+packages registration, connect-time authentication, and the client skill (see
+`plugin/README.md`); it is not required to use the server directly.
 
 ## Tools
 
@@ -120,8 +121,12 @@ claude mcp add --transport http arachne \
 
 Prefer a local `headersHelper` or equivalent secret store over placing the
 literal credential in a committed `.mcp.json` or shell history. Allowlist the
-five `mcp__arachne__...` tools and set the MCP idle timeout above the configured
-heartbeat interval. Any later Claude Code plugin should be a thin
-harness-specific layer for installation, permissions, and prompting; it should
-not reimplement publication, authentication, cursor handling, or wait
-semantics.
+five tools and set the MCP idle timeout above the configured heartbeat
+interval. The checked-in plugin (`plugin/`, installable from this repo's
+marketplace manifest) is exactly the thin harness-specific layer this
+anticipated: registration with a `headersHelper` that reads the local token
+file, plus the client skill. It reimplements none of publication,
+authentication, cursor handling, or wait semantics. Mind the permission
+namespace: a plugin-bundled registration surfaces tools as
+`mcp__plugin_arachne_arachne__...`, while a direct `claude mcp add`
+registration surfaces them as `mcp__arachne__...`.
