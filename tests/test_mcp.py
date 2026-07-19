@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import unittest
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -115,6 +116,13 @@ class MCPTokenTests(unittest.TestCase):
             link.symlink_to(target)
             with self.assertRaisesRegex(RuntimeError, "cannot read MCP token"):
                 _read_owner_token(link)
+
+
+class AdapterVersionSyncTests(unittest.TestCase):
+    def test_adapter_version_matches_the_project_version(self) -> None:
+        with (REPO / "pyproject.toml").open("rb") as stream:
+            manifest = tomllib.load(stream)
+        self.assertEqual(ADAPTER_VERSION, manifest["project"]["version"])
 
 
 class ArachneMCPTests(unittest.IsolatedAsyncioTestCase):
