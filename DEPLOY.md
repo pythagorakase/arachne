@@ -318,6 +318,14 @@ destination behind an existing cursor can therefore suppress several wakes.
   at real `cairn` locations.
 - Install `uv`, run `uv sync --frozen`, and install the two checked-in user
   units from `deploy/systemd/`. Start the core before the MCP adapter.
+  **Run every `uv` command as the service user, never via `sudo`.** uv installs
+  by hardlinking from `~/.cache/uv`; one root-umask invocation seeds the cache
+  with root-owned mode-600 blobs, and later user-level syncs hardlink those
+  same unreadable inodes into the venv. The failure is deferred and oblique:
+  imports may still succeed while `importlib.metadata.version()` returns
+  `None` from the unreadable `METADATA`, crashing the MCP handshake. If it
+  happens: remove `~/.cache/uv` and `.venv` as the service user (directory
+  write permission suffices) and re-run `uv sync --frozen`.
 - Inventory the currently published HTML under the seedbox's `~/arachne/pages/`.
   Those files are runtime content and deliberately git-ignored, so the checkout
   alone is not a page backup.

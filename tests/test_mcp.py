@@ -17,7 +17,7 @@ import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from mcp_server import _read_owner_token
+from mcp_server import ADAPTER_VERSION, _read_owner_token
 from tests.test_e2e import RunningArachne, bearer, free_port, post_ruling
 
 
@@ -149,6 +149,16 @@ class ArachneMCPTests(unittest.IsolatedAsyncioTestCase):
         structured = getattr(result, "structuredContent")
         self.assertIsInstance(structured, dict)
         return structured
+
+    async def test_initialize_advertises_the_adapter_version(self) -> None:
+        async with httpx.AsyncClient(headers=bearer(self.arachne.token)) as client:
+            async with streamable_http_client(
+                self.mcp.mcp_url, http_client=client
+            ) as (read_stream, write_stream, _):
+                async with ClientSession(read_stream, write_stream) as session:
+                    result = await session.initialize()
+        self.assertEqual(result.serverInfo.name, "Arachne")
+        self.assertEqual(result.serverInfo.version, ADAPTER_VERSION)
 
     async def test_endpoint_authentication_tools_and_publication(self) -> None:
         async with httpx.AsyncClient() as client:
