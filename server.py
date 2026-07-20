@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import html
 import json
 import logging
 import os
@@ -34,6 +33,15 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from page_contract import PAGE_NAME, publish_html, read_page_issue
+from ui import (
+    BOOTSTRAP_CSP,
+    INBOX_CSP,
+    fallback_title,
+    page_title,
+    render_bootstrap,
+    render_inbox,
+    render_locked_inbox,
+)
 
 
 LOGGER = logging.getLogger("arachne")
@@ -70,18 +78,6 @@ DECISION_PAGE_CSP = (
     "frame-src 'none'; "
     "frame-ancestors 'none'"
 )
-# The inbox is server-rendered, script-free HTML; its policy is stricter than
-# the decision-page CSP because nothing on it ever needs to execute.
-INBOX_CSP = (
-    "default-src 'none'; "
-    "style-src 'unsafe-inline'; "
-    "object-src 'none'; "
-    "base-uri 'none'; "
-    "form-action 'none'; "
-    "frame-ancestors 'none'"
-)
-PAGE_TITLE = re.compile(rb"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
-PAGE_TITLE_SCAN_BYTES = 16_384
 
 
 class ClientProblem(ValueError):
@@ -187,127 +183,6 @@ def _parse_submitted_at(text: object) -> float | None:
         return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
-
-
-def _page_title(path: Path) -> str | None:
-    try:
-        with path.open("rb") as stream:
-            head = stream.read(PAGE_TITLE_SCAN_BYTES)
-    except OSError:
-        return None
-    match = PAGE_TITLE.search(head)
-    if match is None:
-        return None
-    text = html.unescape(match.group(1).decode("utf-8", "replace"))
-    collapsed = " ".join(text.split())
-    return collapsed[:120] or None
-
-
-def _fallback_title(name: str, issue: str) -> str:
-    stem = name[: -len(".html")]
-    remainder = stem.removeprefix("decision_").removeprefix(issue).strip("_-")
-    prettified = remainder.replace("_", " ").replace("-", " ").strip()
-    return prettified or stem
-
-
-def _format_moment(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-
-_INBOX_STYLE = """
-:root { color-scheme: dark; }
-* { box-sizing: border-box; margin: 0; }
-body { font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #131118; color: #e8e4f0; padding: 1.25rem;
-  max-width: 44rem; margin: 0 auto; }
-header { margin: .5rem 0 1.5rem; }
-h1 { font-size: 1.55rem; letter-spacing: .06em; }
-.tag { color: #8f87a8; font-size: .8rem; letter-spacing: .3em;
-  text-transform: uppercase; }
-h2 { font-size: .78rem; letter-spacing: .22em; text-transform: uppercase;
-  color: #8f87a8; margin: 1.6rem 0 .6rem; border-bottom: 1px solid #2a2536;
-  padding-bottom: .4rem; }
-ul { list-style: none; padding: 0; display: grid; gap: .5rem; }
-.brief { display: flex; gap: .9rem; align-items: center; background: #1c1926;
-  border: 1px solid #2a2536; border-radius: .65rem; padding: .85rem 1rem;
-  text-decoration: none; color: inherit; }
-.brief:hover, .brief:active { border-color: #6d5fae; background: #211d30; }
-.issue { font-family: ui-monospace, SFMono-Regular, monospace; font-size: .78rem;
-  color: #b7a9e8; background: #272138; border-radius: .4rem;
-  padding: .25rem .55rem; white-space: nowrap; }
-.text { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
-.title { font-weight: 600; overflow-wrap: anywhere; }
-.meta { font-size: .78rem; color: #8f87a8; }
-.archive .brief { opacity: .6; }
-.empty { color: #6f6787; font-style: italic; padding: .55rem 0; }
-.locked { margin: 1.4rem 0 .6rem; font-size: 1.05rem; }
-.hint { color: #8f87a8; }
-footer { margin-top: 2.6rem; font-size: .72rem; color: #57506b;
-  text-align: center; letter-spacing: .14em; }
-"""
-
-
-def _inbox_document(main_html: str) -> bytes:
-    document = f"""<!doctype html>
-<html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Arachne — inbox</title>
-<style>{_INBOX_STYLE}</style>
-<body>
-<header><h1>Arachne</h1><p class="tag">decision loom</p></header>
-<main>
-{main_html}
-</main>
-<footer>tap a brief to open it · refresh for new arrivals</footer>
-</body>
-</html>
-"""
-    return document.encode("utf-8")
-
-
-def _render_brief_item(entry: dict[str, Any], *, ruled: bool) -> str:
-    name = html.escape(entry["name"], quote=True)
-    issue = html.escape(entry["issue"])
-    title = html.escape(entry["title"])
-    if ruled:
-        moment = _format_moment(entry["ruled_at"])
-        meta = f"ruled {moment} · ruling {entry['ruling_sequence']}"
-    else:
-        meta = f"published {_format_moment(entry['published_at'])}"
-    return (
-        f'<li><a class="brief" href="/{name}">'
-        f'<span class="issue">{issue}</span>'
-        f'<span class="text"><span class="title">{title}</span>'
-        f'<span class="meta">{html.escape(meta)}</span></span>'
-        f"</a></li>"
-    )
-
-
-def _render_inbox(
-    pending: list[dict[str, Any]], archived: list[dict[str, Any]]
-) -> bytes:
-    pending_items = "\n".join(
-        _render_brief_item(entry, ruled=False) for entry in pending
-    ) or '<li class="empty">The loom is quiet — no briefs await your ruling.</li>'
-    archived_items = "\n".join(
-        _render_brief_item(entry, ruled=True) for entry in archived
-    ) or '<li class="empty">Nothing has been ruled yet.</li>'
-    main = (
-        f"<section><h2>Awaiting ruling · {len(pending)}</h2>"
-        f"<ul>{pending_items}</ul></section>"
-        f'<section class="archive"><h2>Archive · {len(archived)}</h2>'
-        f"<ul>{archived_items}</ul></section>"
-    )
-    return _inbox_document(main)
-
-
-def _render_locked_inbox() -> bytes:
-    return _inbox_document(
-        '<p class="locked">This device holds no live Arachne session.</p>'
-        '<p class="hint">Ask your agent for a fresh bootstrap key, then return '
-        "here — the inbox unlocks itself.</p>"
-    )
 
 
 @dataclass(frozen=True)
@@ -1005,50 +880,17 @@ class ArachneHandler(BaseHTTPRequestHandler):
             name = query["next"][0].removeprefix("/")
             self._page_candidate(name)
             binding = name
-            destination = json.dumps(f"/{name}")
+            destination = f"/{name}"
         else:
             # No destination page: establish the session and land on the inbox.
             binding = INBOX_PATH
-            destination = json.dumps(INBOX_PATH)
-        page = json.dumps(binding)
-        body = f"""<!doctype html>
-<meta charset=\"utf-8\">
-<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
-<title>Opening Arachne…</title>
-<p id=\"status\">Opening Arachne…</p>
-<script>
-(async () => {{
-  const status = document.getElementById('status');
-  const secrets = new URLSearchParams(location.hash.slice(1));
-  const token = secrets.get('token');
-  const ticket = secrets.get('ticket');
-  if ((!token && !ticket) || (token && ticket)) {{
-    status.textContent = 'This Arachne link is missing or has conflicting credentials.';
-    return;
-  }}
-  history.replaceState(null, '', location.pathname + location.search);
-  const response = await fetch('/session', {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify(token ? {{token}} : {{ticket, page: {page}}}),
-  }});
-  if (!response.ok) {{ status.textContent = 'This Arachne link is invalid or expired.'; return; }}
-  location.replace({destination});
-}})().catch(() => {{
-  document.getElementById('status').textContent = 'Arachne could not establish a session.';
-}});
-</script>
-""".encode("utf-8")
+            destination = INBOX_PATH
+        body = render_bootstrap(binding, destination)
         self._write(
             HTTPStatus.OK,
             body,
             "text/html; charset=utf-8",
-            extra_headers={
-                "Content-Security-Policy": (
-                    "default-src 'none'; script-src 'unsafe-inline'; "
-                    "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
-                )
-            },
+            extra_headers={"Content-Security-Policy": BOOTSTRAP_CSP},
         )
 
     def _serve_page(self, path: str) -> None:
@@ -1077,7 +919,7 @@ class ArachneHandler(BaseHTTPRequestHandler):
         except ClientProblem:
             self._write(
                 HTTPStatus.UNAUTHORIZED,
-                _render_locked_inbox(),
+                render_locked_inbox(),
                 "text/html; charset=utf-8",
                 extra_headers={"Content-Security-Policy": INBOX_CSP},
             )
@@ -1085,7 +927,7 @@ class ArachneHandler(BaseHTTPRequestHandler):
         pending, archived = self._inbox_entries()
         self._write(
             HTTPStatus.OK,
-            _render_inbox(pending, archived),
+            render_inbox(pending, archived),
             "text/html; charset=utf-8",
             extra_headers={"Content-Security-Policy": INBOX_CSP},
         )
@@ -1134,7 +976,7 @@ class ArachneHandler(BaseHTTPRequestHandler):
             entry = {
                 "name": name,
                 "issue": issue,
-                "title": _page_title(candidate) or _fallback_title(name, issue),
+                "title": page_title(candidate) or fallback_title(name, issue),
                 "published_at": published_at,
             }
             filed = [

@@ -36,7 +36,7 @@ jobs:
 
       - name: Compile Python entry points
         run: >-
-          python -m py_compile server.py mcp_server.py page_contract.py
+          python -m py_compile server.py mcp_server.py page_contract.py ui/*.py
           bin/bootstrap-url.py bin/publish-page.py
 
       - name: Install ShellCheck

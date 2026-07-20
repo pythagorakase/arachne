@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Opening Arachne…</title>
+<p id="status">Opening Arachne…</p>
+<script>
+(async () => {
+  const status = document.getElementById('status');
+  const secrets = new URLSearchParams(location.hash.slice(1));
+  const token = secrets.get('token');
+  const ticket = secrets.get('ticket');
+  if ((!token && !ticket) || (token && ticket)) {
+    status.textContent = 'This Arachne link is missing or has conflicting credentials.';
+    return;
+  }
+  history.replaceState(null, '', location.pathname + location.search);
+  const response = await fetch('/session', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(token ? {token} : {ticket, page: @@ARACHNE_BOOTSTRAP_BINDING@@}),
+  });
+  if (!response.ok) { status.textContent = 'This Arachne link is invalid or expired.'; return; }
+  location.replace(@@ARACHNE_BOOTSTRAP_DESTINATION@@);
+})().catch(() => {
+  document.getElementById('status').textContent = 'Arachne could not establish a session.';
+});
+</script>
