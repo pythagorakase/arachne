@@ -6,6 +6,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,12 @@ PAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.html\Z")
 # a dot-directory the page allowlist can never serve: PAGE_NAME requires a
 # leading alphanumeric and the router rejects multi-segment paths.
 METADATA_DIRECTORY = ".meta"
+
+# Page and sidecar are two files, so a publication is two commits. This lock
+# serializes whole publications within a process (the server is the only
+# production writer), so concurrent same-name publishes cannot interleave one
+# publication's page with another's issue.
+_PUBLISH_LOCK = threading.Lock()
 LOOPBACK_RULING = re.compile(
     r"https?://(?:127\.0\.0\.1|localhost)(?::[0-9]+)?/ruling",
     re.IGNORECASE,
@@ -101,51 +108,57 @@ def publish_html(
     When *issue* is provided it is recorded as sidecar metadata so the inbox
     can pair the page with its ruling regardless of the filename; when it is
     absent any stale recorded issue from a prior publication is removed.
+
+    Publications are serialized per process, and the commit order — remove
+    the old sidecar, install the page, record the new sidecar — keeps every
+    interruption window in the "no recorded issue" state, which degrades to
+    filename inference instead of pairing a page with another publication's
+    issue.
     """
 
     normalized, endpoint_replacements, label_replacements = prepare_html(name, html)
     issue_token = normalize_issue(issue)
-    pages_dir.mkdir(parents=True, exist_ok=True)
-    destination = pages_dir / name
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{name}.", suffix=".tmp", dir=pages_dir
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(normalized)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_name, destination)
-        directory = os.open(pages_dir, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-    sidecar = metadata_path(pages_dir, name)
-    if issue_token is None:
+    with _PUBLISH_LOCK:
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        destination = pages_dir / name
+        sidecar = metadata_path(pages_dir, name)
         sidecar.unlink(missing_ok=True)
-    else:
-        sidecar.parent.mkdir(mode=0o700, exist_ok=True)
-        body = json.dumps({"issue": issue_token}, ensure_ascii=False) + "\n"
         descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{name}.", suffix=".tmp", dir=sidecar.parent
+            prefix=f".{name}.", suffix=".tmp", dir=pages_dir
         )
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                stream.write(body)
+                stream.write(normalized)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary_name, sidecar)
+            os.replace(temporary_name, destination)
+            directory = os.open(pages_dir, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         finally:
             try:
                 os.unlink(temporary_name)
             except FileNotFoundError:
                 pass
+        if issue_token is not None:
+            sidecar.parent.mkdir(mode=0o700, exist_ok=True)
+            body = json.dumps({"issue": issue_token}, ensure_ascii=False) + "\n"
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{name}.", suffix=".tmp", dir=sidecar.parent
+            )
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    stream.write(body)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary_name, sidecar)
+            finally:
+                try:
+                    os.unlink(temporary_name)
+                except FileNotFoundError:
+                    pass
     return Publication(
         name=name,
         destination=destination,

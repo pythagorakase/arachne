@@ -14,12 +14,15 @@
 #   - certificates via DNS-01 (no public HTTP challenge listener)
 #   - verified HTTPS to the loopback backend (private CA), matching Tailscale Serve
 #
-# default_bind covers every server Caddy creates on its own — most importantly
-# the automatic HTTP→HTTPS redirect listener, which upstream documents as NOT
-# inheriting a site's `bind`. Without it, port 80 could open on 0.0.0.0.
+# DNS-01 issuance needs no HTTP listener, so the automatic HTTP→HTTPS
+# redirect server is disabled outright — no port-80 socket exists on any
+# interface, on any Caddy version, regardless of how redirect servers treat
+# bind inheritance. default_bind remains as defense in depth for any server
+# Caddy might otherwise create implicitly.
 
 {
 	default_bind @@TAILNET_IPV4@@
+	auto_https disable_redirects
 }
 
 arachne.pythagora.net {

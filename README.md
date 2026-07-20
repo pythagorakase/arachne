@@ -31,7 +31,7 @@ Three properties a local `AskUserQuestion` can't offer at once:
         │ POST /ruling  {issue, markdown, form}    │ exits with the ruling payload →
         ▼ https://arachne.<tailnet>.ts.net         │ harness re-invokes the agent
    ┌─ always-on host (cairn) ──────────────────────┴─────────────────┐
-   │ tailscaled (rootless) ─ tailscale serve ─ verified HTTPS → :8788 │
+   │ tailscaled (system) ─── tailscale serve ─ verified HTTPS → :8788 │
    │ server.py  (loopback TLS + owner-only application token)          │
    │   POST /ruling ─notify→ threading.Condition ─release→ GET /wait  │
    │   pages/decision_*.html       ~/.local/state/arachne/rulings/    │

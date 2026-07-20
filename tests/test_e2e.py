@@ -527,6 +527,22 @@ class ArachneEndToEndTests(unittest.TestCase):
             )
         self.assertEqual(crossed.exception.code, 401)
 
+    def test_ruling_in_same_millisecond_as_publication_still_archives(self) -> None:
+        # submitted_at is millisecond-truncated; a finer-grained page mtime
+        # must not make a same-millisecond ruling look pre-publication.
+        page = self.pages / "decision_476.html"
+        _, filed = post_ruling(self.service.url, self.service.token, "476")
+        submitted = filed["submitted_at"]
+        base = submitted[:-1]  # strip trailing Z; millisecond ISO timestamp
+        from datetime import datetime
+
+        moment = datetime.fromisoformat(base + "+00:00").timestamp()
+        # Republish "at" the ruling's millisecond but 600µs later.
+        os.utime(page, ns=(int(moment * 1e9), int((moment + 0.0006) * 1e9)))
+        status, body, _ = self._get_inbox(bearer(self.service.token))
+        self.assertIn("Archive · 1", body)
+        self.assertIn("Awaiting ruling · 0", body)
+
     def test_recorded_issue_pairs_ruling_regardless_of_filename(self) -> None:
         # PR #10 review repro (Sol): a contract-valid slug-only page name
         # whose filed issue shares nothing with the filename must still

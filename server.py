@@ -1123,7 +1123,11 @@ class ArachneHandler(BaseHTTPRequestHandler):
             candidate = pages_dir / name
             if candidate.is_symlink() or not candidate.is_file():
                 continue
-            published_at = candidate.stat().st_mtime
+            # Floor the mtime to whole milliseconds: submitted_at is persisted
+            # at millisecond precision, so comparing against a finer-grained
+            # mtime would let a ruling filed later in the same millisecond
+            # appear to precede its page's publication and never archive it.
+            published_at = int(candidate.stat().st_mtime * 1000) / 1000
             # The issue recorded at publication is authoritative; filename
             # inference remains only as a fallback for pre-metadata pages.
             issue = read_page_issue(pages_dir, name) or _page_issue(name)

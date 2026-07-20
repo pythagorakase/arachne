@@ -619,21 +619,26 @@ the second site block only if the MCP adapter should also ride the custom
 name). The proxy target is the same verified-HTTPS loopback backend Tailscale
 Serve uses; Caddy verifies it against the private CA, so a different process
 claiming port 8788 cannot impersonate Arachne here either. Validate with the
-token exported (`set -a; . /etc/caddy/cloudflare.env; set +a; caddy validate
---config /etc/caddy/Caddyfile --adapter caddyfile`) — an ad-hoc validate
-without it fails on an empty token even when the config is correct. Because
-the apt package started the stock binary before the swap, the first activation
-must be a full `sudo systemctl restart caddy` — a reload would hand the
+token exported — the env file is root-owned 0600, so validation must run as
+root: `sudo sh -c 'set -a; . /etc/caddy/cloudflare.env; set +a; caddy validate
+--config /etc/caddy/Caddyfile --adapter caddyfile'`. An unprivileged shell
+cannot even source the file, and a validate without the token fails on an
+empty-token provision error even when the config is correct. Because the apt
+package started the stock binary before the swap, the first activation must be
+a full `sudo systemctl restart caddy` — a reload would hand the
 Cloudflare-provider config to the old process, which cannot load it. Reloads
 are fine for every subsequent edit. Afterwards confirm with `ss -tlnp` that
-both :443 and the :80 redirect listen only on the tailnet address (the
-Caddyfile's global `default_bind` enforces this for servers Caddy creates
-implicitly). Re-copy `arachne-ca.pem` if the private CA is ever rotated, and
+:443 listens only on the tailnet address and that **no :80 listener exists at
+all** — the Caddyfile disables the automatic HTTP→HTTPS redirect server
+(`auto_https disable_redirects`), since DNS-01 needs no HTTP listener and
+redirect servers are not guaranteed to inherit bind addresses on every Caddy
+version. Re-copy `arachne-ca.pem` if the private CA is ever rotated, and
 expect apt to hold the diverted binary (`caddy.dpkg`) while renewals ride the
 custom build.
 
 ```bash
-sudo systemctl reload caddy
+sudo systemctl restart caddy   # first activation MUST be a restart (see below);
+                               # use `reload` only for subsequent config edits
 ```
 
 If the MCP adapter is fronted too, append `arachne.pythagora.net:8443` to
