@@ -527,6 +527,72 @@ class ArachneEndToEndTests(unittest.TestCase):
             )
         self.assertEqual(crossed.exception.code, 401)
 
+    def test_recorded_issue_pairs_ruling_regardless_of_filename(self) -> None:
+        # PR #10 review repro (Sol): a contract-valid slug-only page name
+        # whose filed issue shares nothing with the filename must still
+        # archive when its ruling lands.
+        source = """<!doctype html><title>Drift</title><script>
+        localStorage.setItem('draft', 'yes');
+        fetch('/ruling', {method: 'POST'});
+        </script>"""
+        status, published = post_json(
+            self.service.url,
+            "/pages",
+            self.service.token,
+            {
+                "name": "decision_relationship_drift.html",
+                "html": source,
+                "issue": "476",
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(published["issue"], "476")
+
+        post_ruling(self.service.url, self.service.token, "476")
+        status, body, _ = self._get_inbox(bearer(self.service.token))
+        self.assertLess(
+            body.index("Archive"),
+            body.index("decision_relationship_drift.html"),
+        )
+
+        # Republishing without an issue removes the stale recording, so the
+        # fallback filename inference ("relationship") no longer pairs a
+        # fresh 476 ruling and the brief stays pending.
+        time.sleep(0.05)
+        status, republished = post_json(
+            self.service.url,
+            "/pages",
+            self.service.token,
+            {"name": "decision_relationship_drift.html", "html": source},
+        )
+        self.assertEqual(status, 201)
+        self.assertIsNone(republished["issue"])
+        post_ruling(self.service.url, self.service.token, "476")
+        status, body, _ = self._get_inbox(bearer(self.service.token))
+        self.assertLess(
+            body.index("decision_relationship_drift.html"),
+            body.index("Archive"),
+        )
+
+        # Sidecar metadata is never servable, and invalid issues fail loud.
+        with self.assertRaises(HTTPError) as unservable:
+            urlopen(
+                Request(
+                    f"{self.service.url}/.meta/decision_relationship_drift.html.json",
+                    headers=bearer(self.service.token),
+                ),
+                timeout=1,
+            )
+        self.assertEqual(unservable.exception.code, 404)
+        with self.assertRaises(HTTPError) as invalid:
+            post_json(
+                self.service.url,
+                "/pages",
+                self.service.token,
+                {"name": "decision_x.html", "html": source, "issue": True},
+            )
+        self.assertEqual(invalid.exception.code, 400)
+
     def test_bootstrap_url_helper_inbox_variant(self) -> None:
         result = subprocess.run(
             [

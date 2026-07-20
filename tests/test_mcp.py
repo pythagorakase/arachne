@@ -198,10 +198,15 @@ class ArachneMCPTests(unittest.IsolatedAsyncioTestCase):
             published = self.structured(
                 await session.call_tool(
                     "publish_decision",
-                    arguments={"name": "decision_mcp.html", "html": html},
+                    arguments={
+                        "name": "decision_mcp.html",
+                        "html": html,
+                        "issue": "mcp-476",
+                    },
                 )
             )
             self.assertEqual(published["page"], "decision_mcp.html")
+            self.assertEqual(published["issue"], "mcp-476")
             self.assertEqual(
                 published["url"],
                 "https://arachne.example.test/decision_mcp.html",

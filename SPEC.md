@@ -92,10 +92,14 @@ keep, but not mandated.)
 - **Inbox at the root.** The stable root path is an authenticated mailbox:
   briefs awaiting a ruling, and an archive **derived** from filed rulings — a
   ruling carrying a page's issue token, filed at or after that page's
-  publication, archives it; re-publishing the issue reopens it. Filing the
-  ruling *is* the archive action: no deletion, move, or other mutating inbox
-  operation may exist. The unauthenticated root must stay human-friendly for a
-  lapsed bookmark while revealing nothing — no page names, counts, or rulings.
+  publication, archives it; re-publishing the issue reopens it. The pairing
+  token is **recorded at publication** (the publish operation accepts the
+  issue the page will file); filename inference is only a fallback for pages
+  published without one, since a valid page name carries no reliable issue.
+  Filing the ruling *is* the archive action: no deletion, move, or other
+  mutating inbox operation may exist. The unauthenticated root must stay
+  human-friendly for a lapsed bookmark while revealing nothing — no page
+  names, counts, or rulings.
 - **Accept a ruling.** Accept a submission carrying at least: an **issue id**, a
   **human-readable record** (markdown), and the **raw form state** (structured).
   Persist it durably as retrievable artifacts.

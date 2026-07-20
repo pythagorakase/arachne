@@ -576,8 +576,10 @@ Three properties make this shape spec-compliant (SPEC §6):
 
 1. Find `cairn`'s tailnet IPv4: `tailscale ip -4` on `cairn`.
 2. In the `pythagora.net` zone add an **A** record: name `arachne`, content
-   `<tailnet IPv4>`, proxy status **DNS only** (grey cloud). Optionally add an
-   **AAAA** record for `tailscale ip -6` the same way.
+   `<tailnet IPv4>`, proxy status **DNS only** (grey cloud). Do **not** add an
+   AAAA record unless the Caddyfile also binds the tailnet IPv6 address — an
+   advertised address with no listener stalls IPv6-capable clients until IPv4
+   fallback.
 3. Create an API token scoped to exactly this zone: *Zone → DNS → Edit* plus
    *Zone → Zone → Read*, zone resources limited to `pythagora.net`. This token
    can only manage DNS records for the one zone; treat it as a secret anyway.
@@ -619,9 +621,16 @@ Serve uses; Caddy verifies it against the private CA, so a different process
 claiming port 8788 cannot impersonate Arachne here either. Validate with the
 token exported (`set -a; . /etc/caddy/cloudflare.env; set +a; caddy validate
 --config /etc/caddy/Caddyfile --adapter caddyfile`) — an ad-hoc validate
-without it fails on an empty token even when the config is correct. Re-copy
-`arachne-ca.pem` if the private CA is ever rotated, and expect apt to hold the
-diverted binary (`caddy.dpkg`) while renewals ride the custom build.
+without it fails on an empty token even when the config is correct. Because
+the apt package started the stock binary before the swap, the first activation
+must be a full `sudo systemctl restart caddy` — a reload would hand the
+Cloudflare-provider config to the old process, which cannot load it. Reloads
+are fine for every subsequent edit. Afterwards confirm with `ss -tlnp` that
+both :443 and the :80 redirect listen only on the tailnet address (the
+Caddyfile's global `default_bind` enforces this for servers Caddy creates
+implicitly). Re-copy `arachne-ca.pem` if the private CA is ever rotated, and
+expect apt to hold the diverted binary (`caddy.dpkg`) while renewals ride the
+custom build.
 
 ```bash
 sudo systemctl reload caddy

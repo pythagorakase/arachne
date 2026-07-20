@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from page_contract import PAGE_NAME, publish_html
+from page_contract import PAGE_NAME, publish_html, read_page_issue
 
 
 LOGGER = logging.getLogger("arachne")
@@ -1124,7 +1124,9 @@ class ArachneHandler(BaseHTTPRequestHandler):
             if candidate.is_symlink() or not candidate.is_file():
                 continue
             published_at = candidate.stat().st_mtime
-            issue = _page_issue(name)
+            # The issue recorded at publication is authoritative; filename
+            # inference remains only as a fallback for pre-metadata pages.
+            issue = read_page_issue(pages_dir, name) or _page_issue(name)
             entry = {
                 "name": name,
                 "issue": issue,
@@ -1249,11 +1251,15 @@ class ArachneHandler(BaseHTTPRequestHandler):
 
     def _publish_page(self) -> None:
         payload = self._read_json_payload("POST /pages", "decision page")
-        if not isinstance(payload, dict) or set(payload) != {"name", "html"}:
+        if (
+            not isinstance(payload, dict)
+            or not {"name", "html"} <= set(payload)
+            or not set(payload) <= {"name", "html", "issue"}
+        ):
             raise ClientProblem(
                 HTTPStatus.BAD_REQUEST,
                 "invalid_page",
-                "the publication request must contain only name and html",
+                "the publication request must contain name, html, and optionally issue",
             )
         name = payload["name"]
         html = payload["html"]
@@ -1264,7 +1270,9 @@ class ArachneHandler(BaseHTTPRequestHandler):
                 "'name' and 'html' must be strings",
             )
         try:
-            publication = publish_html(name, html, self.arachne.config.pages_dir)
+            publication = publish_html(
+                name, html, self.arachne.config.pages_dir, issue=payload.get("issue")
+            )
         except ValueError as exc:
             raise ClientProblem(
                 HTTPStatus.BAD_REQUEST,
@@ -1276,6 +1284,7 @@ class ArachneHandler(BaseHTTPRequestHandler):
             {
                 "ok": True,
                 "page": publication.name,
+                "issue": publication.issue,
                 "rewritten_references": publication.replacements,
             },
         )

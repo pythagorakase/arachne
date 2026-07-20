@@ -13,6 +13,14 @@
 #   - bind ONLY the tailnet address — never 0.0.0.0, never a LAN/public interface
 #   - certificates via DNS-01 (no public HTTP challenge listener)
 #   - verified HTTPS to the loopback backend (private CA), matching Tailscale Serve
+#
+# default_bind covers every server Caddy creates on its own — most importantly
+# the automatic HTTP→HTTPS redirect listener, which upstream documents as NOT
+# inheriting a site's `bind`. Without it, port 80 could open on 0.0.0.0.
+
+{
+	default_bind @@TAILNET_IPV4@@
+}
 
 arachne.pythagora.net {
 	bind @@TAILNET_IPV4@@

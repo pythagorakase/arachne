@@ -243,11 +243,16 @@ class ArachneClient:
     async def get_ruling(self, sequence: int) -> dict[str, Any]:
         return await self._json_request("GET", f"/rulings/{sequence}")
 
-    async def publish_decision(self, name: str, html: str) -> dict[str, Any]:
+    async def publish_decision(
+        self, name: str, html: str, issue: str | None
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"name": name, "html": html}
+        if issue is not None:
+            payload["issue"] = issue
         result = await self._json_request(
             "POST",
             "/pages",
-            payload={"name": name, "html": html},
+            payload=payload,
             expected=(201,),
         )
         result["url"] = f"{self.settings.public_url}/{quote(name, safe='')}"
@@ -451,10 +456,16 @@ def create_app(settings: Settings) -> Starlette:
         return await client.wait_for_ruling(since, ctx)
 
     @mcp.tool(annotations=annotations_write, structured_output=True)
-    async def publish_decision(name: str, html: str) -> dict[str, Any]:
-        """Validate and atomically publish trusted decision HTML on Arachne."""
+    async def publish_decision(
+        name: str, html: str, issue: str | None = None
+    ) -> dict[str, Any]:
+        """Validate and atomically publish trusted decision HTML on Arachne.
 
-        return await client.publish_decision(name, html)
+        Pass the issue token the page will file so the inbox can pair the
+        ruling with this page regardless of the filename.
+        """
+
+        return await client.publish_decision(name, html, issue)
 
     @mcp.tool(annotations=annotations_write, structured_output=True)
     async def bootstrap_url(page: str | None = None) -> dict[str, Any]:

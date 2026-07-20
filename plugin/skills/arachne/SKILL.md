@@ -17,7 +17,7 @@ tools (surfaced as `mcp__plugin_arachne_arachne__<tool>`):
 | `status(since)` | Health + non-destructive backlog summaries after `since`. |
 | `get_ruling(sequence)` | Read one complete persisted ruling; no cursor change. |
 | `wait_for_ruling(since)` | Block until the first ruling after `since`; returns `{cursor, ruling}`. |
-| `publish_decision(name, html)` | Server-side contract validation + atomic publish; returns the page URL. |
+| `publish_decision(name, html, issue?)` | Server-side contract validation + atomic publish; returns the page URL. Pass the issue the page files. |
 | `bootstrap_url(page?)` | Mint a single-use, short-lived browser URL; omit `page` to land on the inbox at `/`. |
 
 ## When to Use It (and When Not)
@@ -50,10 +50,13 @@ losing one is not. Never hand-edit it otherwise.
    or token trouble — do not improvise fallbacks.
 1. **Author** a self-contained `decision_<slug>.html` per the page contract
    below.
-2. **Publish** with `publish_decision(name, html)`. Validation is
-   server-side (relative `/ruling` endpoint, `localStorage` persistence,
-   name allowlist `[A-Za-z0-9][A-Za-z0-9._-]*\.html`); it rewrites absolute
-   loopback endpoints and publishes atomically. Returns the public page URL.
+2. **Publish** with `publish_decision(name, html, issue)`, where `issue` is
+   the same token the page's `/ruling` POST will carry — recording it is what
+   lets the inbox archive the brief the moment its ruling is filed.
+   Validation is server-side (relative `/ruling` endpoint, `localStorage`
+   persistence, name allowlist `[A-Za-z0-9][A-Za-z0-9._-]*\.html`); it
+   rewrites absolute loopback endpoints and publishes atomically. Returns the
+   public page URL.
 3. **Point at the inbox** — the human's devices hold a fifteen-day sliding
    session and a bookmark to the stable inbox at `/`, where the new brief is
    already listed. Default to saying the brief is **in their Arachne inbox**
