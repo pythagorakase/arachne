@@ -217,6 +217,14 @@ class ArachneMCPTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(self.arachne.token, json.dumps(bootstrap))
             self.assertEqual(bootstrap["credential"], "single-use bootstrap ticket")
 
+            inbox = self.structured(
+                await session.call_tool("bootstrap_url", arguments={})
+            )
+            self.assertIsNone(inbox.get("page"))
+            self.assertIn("/bootstrap#ticket=", inbox["url"])
+            self.assertNotIn("next=", inbox["url"])
+            self.assertNotIn(self.arachne.token, json.dumps(inbox))
+
     async def test_wait_heartbeats_and_explicit_cursor_replay_for_two_consumers(
         self,
     ) -> None:

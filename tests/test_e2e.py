@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
+import hmac
 import http.client
 import json
 import os
@@ -103,6 +105,17 @@ def bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def craft_session_cookie(token: str, expires_at: int) -> str:
+    """Reproduce the server's signed cookie for expiry-window tests."""
+
+    signature = hmac.new(
+        token.encode("ascii"),
+        f"arachne-browser-session-v1:{expires_at}".encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"arachne_session=v1.{expires_at}.{signature}"
+
+
 def get_json(
     url: str, timeout: float = 3, token: str | None = None
 ) -> tuple[int, dict]:
@@ -176,7 +189,7 @@ class ArachneEndToEndTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertIn(b"Arachne test", response.read())
 
-        for path in ("/", "/unknown.html", "/%2e%2e/SPEC.md", "/pages/"):
+        for path in ("/unknown.html", "/%2e%2e/SPEC.md", "/pages/"):
             with self.subTest(path=path):
                 with self.assertRaises(HTTPError) as raised:
                     urlopen(
@@ -363,6 +376,177 @@ class ArachneEndToEndTests(unittest.TestCase):
             )
         self.assertEqual(invalid_page.exception.code, 400)
         self.assertFalse((self.pages / "decision_invalid.html").exists())
+
+    def _get_inbox(self, headers: dict[str, str]) -> tuple[int, str, dict]:
+        request = Request(f"{self.service.url}/", headers=headers)
+        with urlopen(request, timeout=2) as response:
+            return response.status, response.read().decode(), response.headers
+
+    def test_inbox_lists_pending_briefs_and_archives_on_ruling(self) -> None:
+        status, body, headers = self._get_inbox(bearer(self.service.token))
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", headers["Content-Type"])
+        self.assertIn("decision_476.html", body)
+        self.assertIn("Arachne test", body)
+        self.assertIn("Awaiting ruling · 1", body)
+        self.assertIn("Archive · 0", body)
+
+        post_ruling(self.service.url, self.service.token, "476")
+        status, body, _ = self._get_inbox(bearer(self.service.token))
+        self.assertIn("Awaiting ruling · 0", body)
+        self.assertIn("The loom is quiet", body)
+        self.assertIn("Archive · 1", body)
+        self.assertLess(body.index("Archive"), body.index("decision_476.html"))
+
+        # Re-publishing a brief for an already-ruled issue reopens it: the
+        # archive is derived from ruling-after-publication, never mutated.
+        time.sleep(0.05)
+        (self.pages / "decision_476.html").write_text(
+            "<!doctype html><title>Round two</title><h1>Again</h1>",
+            encoding="utf-8",
+        )
+        status, body, _ = self._get_inbox(bearer(self.service.token))
+        self.assertIn("Awaiting ruling · 1", body)
+        self.assertIn("Round two", body)
+        self.assertIn("Archive · 0", body)
+
+    def test_inbox_without_session_is_a_friendly_shell(self) -> None:
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(Request(f"{self.service.url}/"), timeout=1)
+        self.assertEqual(raised.exception.code, 401)
+        self.assertIn("text/html", raised.exception.headers["Content-Type"])
+        body = raised.exception.read().decode()
+        self.assertIn("no live Arachne session", body)
+        self.assertNotIn("decision_476.html", body)
+        self.assertNotIn("Awaiting", body)
+
+    def test_browser_session_slides_past_half_life(self) -> None:
+        import server as arachne_server
+
+        window = arachne_server.SESSION_COOKIE_SECONDS
+        self.assertEqual(window, 15 * 24 * 60 * 60)
+        now = int(time.time())
+
+        aging = craft_session_cookie(self.service.token, now + 24 * 60 * 60)
+        request = Request(
+            f"{self.service.url}/decision_476.html", headers={"Cookie": aging}
+        )
+        with urlopen(request, timeout=1) as response:
+            self.assertEqual(response.status, 200)
+            renewed = response.headers.get("Set-Cookie")
+        self.assertIsNotNone(renewed)
+        assert renewed is not None
+        self.assertIn(f"Max-Age={window}", renewed)
+        self.assertIn("HttpOnly", renewed)
+
+        renewed_pair = renewed.split(";", 1)[0]
+        status, body, _ = self._get_inbox({"Cookie": renewed_pair})
+        self.assertEqual(status, 200)
+        self.assertIn("Awaiting ruling", body)
+
+        fresh = craft_session_cookie(self.service.token, now + window - 5)
+        request = Request(
+            f"{self.service.url}/decision_476.html", headers={"Cookie": fresh}
+        )
+        with urlopen(request, timeout=1) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIsNone(response.headers.get("Set-Cookie"))
+
+        request = Request(
+            f"{self.service.url}/decision_476.html",
+            headers=bearer(self.service.token),
+        )
+        with urlopen(request, timeout=1) as response:
+            self.assertIsNone(response.headers.get("Set-Cookie"))
+
+        expired = craft_session_cookie(self.service.token, now - 5)
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(
+                Request(
+                    f"{self.service.url}/decision_476.html",
+                    headers={"Cookie": expired},
+                ),
+                timeout=1,
+            )
+        self.assertEqual(raised.exception.code, 401)
+
+    def test_inbox_bootstrap_ticket_flow(self) -> None:
+        status, minted = post_json(
+            self.service.url, "/bootstrap-ticket", self.service.token, {"page": None}
+        )
+        self.assertEqual(status, 201)
+        self.assertIsNone(minted["page"])
+        self.assertNotEqual(minted["ticket"], self.service.token)
+
+        status, omitted = post_json(
+            self.service.url, "/bootstrap-ticket", self.service.token, {}
+        )
+        self.assertEqual(status, 201)
+        self.assertIsNone(omitted["page"])
+
+        with urlopen(f"{self.service.url}/bootstrap", timeout=1) as response:
+            shell = response.read().decode()
+        self.assertNotIn(self.service.token, shell)
+        self.assertIn('"/"', shell)
+
+        session_body = json.dumps({"ticket": minted["ticket"], "page": "/"}).encode()
+        request = Request(
+            f"{self.service.url}/session",
+            data=session_body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=1) as response:
+            self.assertEqual(response.status, 204)
+            cookie = response.headers["Set-Cookie"].split(";", 1)[0]
+        status, body, _ = self._get_inbox({"Cookie": cookie})
+        self.assertEqual(status, 200)
+        self.assertIn("Awaiting ruling", body)
+
+        with self.assertRaises(HTTPError) as reused:
+            urlopen(request, timeout=1)
+        self.assertEqual(reused.exception.code, 401)
+
+        # A page-bound ticket must not unlock the inbox.
+        _, bound = post_json(
+            self.service.url,
+            "/bootstrap-ticket",
+            self.service.token,
+            {"page": "decision_476.html"},
+        )
+        mismatched = json.dumps({"ticket": bound["ticket"], "page": "/"}).encode()
+        with self.assertRaises(HTTPError) as crossed:
+            urlopen(
+                Request(
+                    f"{self.service.url}/session",
+                    data=mismatched,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                ),
+                timeout=1,
+            )
+        self.assertEqual(crossed.exception.code, 401)
+
+    def test_bootstrap_url_helper_inbox_variant(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO / "bin" / "bootstrap-url.py"),
+                "--base-url",
+                "https://arachne.example.test",
+                "--token-file",
+                str(self.service.token_file),
+            ],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        parsed = urlsplit(result.stdout.strip())
+        self.assertEqual(parsed.path, "/bootstrap")
+        self.assertEqual(parsed.query, "")
+        self.assertEqual(parse_qs(parsed.fragment), {"token": [self.service.token]})
 
     def test_file_ruling_persists_both_artifacts(self) -> None:
         status, entry = post_ruling(self.service.url, self.service.token)

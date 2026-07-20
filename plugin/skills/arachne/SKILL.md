@@ -18,7 +18,7 @@ tools (surfaced as `mcp__plugin_arachne_arachne__<tool>`):
 | `get_ruling(sequence)` | Read one complete persisted ruling; no cursor change. |
 | `wait_for_ruling(since)` | Block until the first ruling after `since`; returns `{cursor, ruling}`. |
 | `publish_decision(name, html)` | Server-side contract validation + atomic publish; returns the page URL. |
-| `bootstrap_url(page)` | Mint a single-use, short-lived browser URL for the human. |
+| `bootstrap_url(page?)` | Mint a single-use, short-lived browser URL; omit `page` to land on the inbox at `/`. |
 
 ## When to Use It (and When Not)
 
@@ -54,11 +54,16 @@ losing one is not. Never hand-edit it otherwise.
    server-side (relative `/ruling` endpoint, `localStorage` persistence,
    name allowlist `[A-Za-z0-9][A-Za-z0-9._-]*\.html`); it rewrites absolute
    loopback endpoints and publishes atomically. Returns the public page URL.
-3. **Hand over the link** — `bootstrap_url(page)` returns a **single-use**
-   URL that expires in minutes (`expires_at` is in the result). Mint it when
-   the human is ready to tap, send it to them, and mint a fresh one if it
-   lapses. Opening it sets their session cookie and lands on the page; the
-   ticket rides in the URL fragment and never appears in logs.
+3. **Point at the inbox** — the human's devices hold a fifteen-day sliding
+   session and a bookmark to the stable inbox at `/`, where the new brief is
+   already listed. Default to saying the brief is **in their Arachne inbox**
+   (name it; optionally include the plain inbox URL — it carries no secret).
+   Only mint `bootstrap_url()` when a device needs enrollment — it is new, or
+   its session lapsed (~15 idle days) and the inbox shows the locked shell.
+   The result is a **single-use** URL that expires in minutes (`expires_at`
+   is in the result): no-arg lands on the inbox; `bootstrap_url(page)`
+   deep-links one brief. The ticket rides in the URL fragment and never
+   appears in logs.
 4. **Arm the wake** — call `wait_for_ruling(since=<cursor>)` and then end
    your turn (or continue other work). This is a long MCP call: the harness
    auto-backgrounds it into a task after a couple of minutes, the server's

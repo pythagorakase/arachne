@@ -14,7 +14,7 @@ packages registration, connect-time authentication, and the client skill (see
 | `get_ruling(sequence)` | Read one complete persisted ruling. |
 | `wait_for_ruling(since)` | Wait for the first ruling after an explicit cursor. |
 | `publish_decision(name, html)` | Validate and atomically publish trusted HTML. |
-| `bootstrap_url(page)` | Mint a five-minute, single-use browser URL. |
+| `bootstrap_url(page=None)` | Mint a five-minute, single-use browser URL; omit `page` to land on the inbox at `/`. |
 
 `wait_for_ruling` never owns hidden cursor state. Callers pass the last
 observed sequence in `since`, receive the advancing sequence in `cursor`, and

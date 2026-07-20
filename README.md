@@ -27,10 +27,10 @@ Three properties a local `AskUserQuestion` can't offer at once:
 
 ```
 [phone / tablet / laptop browser]            [orchestrating agent, its own session]
-        │ GET  /decision_476.html                 ▲ background: GET /wait?since=N
+        │ GET  /  (inbox) · /decision_476.html    ▲ background: GET /wait?since=N
         │ POST /ruling  {issue, markdown, form}    │ exits with the ruling payload →
         ▼ https://arachne.<tailnet>.ts.net         │ harness re-invokes the agent
-   ┌─ always-on host (seedbox today) ──────────────┴─────────────────┐
+   ┌─ always-on host (cairn) ──────────────────────┴─────────────────┐
    │ tailscaled (rootless) ─ tailscale serve ─ verified HTTPS → :8788 │
    │ server.py  (loopback TLS + owner-only application token)          │
    │   POST /ruling ─notify→ threading.Condition ─release→ GET /wait  │
@@ -48,15 +48,29 @@ server key. Merely claiming port 8788 therefore cannot impersonate Arachne and
 capture forwarded credentials.
 
 Browsers exchange the token once at `/bootstrap` for a `Secure`, `HttpOnly`,
-`SameSite=Strict` cookie whose two-day expiry is enforced by both browser and
-server; decision HTML never contains the secret. The wake client reads the same
-token from an owner-only state file and sends it as a bearer credential.
-Generate a device bootstrap link with:
+`SameSite=Strict` cookie whose fifteen-day expiry is enforced by both browser
+and server — and **slides on active use**: a session presented past its
+half-life is silently re-issued in full, so a device that visits regularly
+never re-enrolls while an idle one still ages out. Decision HTML never
+contains the secret. The wake client reads the same token from an owner-only
+state file and sends it as a bearer credential. Generate a device bootstrap
+link with:
 
 ```bash
 export ARACHNE_PUBLIC_URL=https://arachne.tail342046.ts.net
-bin/bootstrap-url.py --open decision_476_relationship_drift.html
+bin/bootstrap-url.py --open                 # land on the inbox at /
+bin/bootstrap-url.py --open decision_476_relationship_drift.html   # deep link
 ```
+
+**The inbox.** The root path `/` is a stable, bookmarkable mailbox: briefs
+awaiting a ruling on top, an archive of ruled ones below. Archive membership is
+*derived* — a ruling filed for a page's issue at or after its publication
+archives it, and re-publishing the issue reopens it — so submitting a ruling is
+itself the archive action and no destructive inbox endpoint exists. A visit
+with a lapsed session gets a friendly locked shell that names nothing; ask the
+agent for a fresh bootstrap link and the bookmark unlocks itself. Add it to a
+phone home screen once and the agent never needs to hand over per-decision
+URLs again.
 
 ## Security & host-policy posture
 
@@ -71,11 +85,12 @@ bin/bootstrap-url.py --open decision_476_relationship_drift.html
   trusted source. A server-supplied Content Security Policy restricts remote
   active content, framing, base URLs, and network connections, but it is defense
   in depth rather than a sanitizer for arbitrary HTML/JavaScript.
-- **Featherweight, rootless, no prohibited category.** stdlib `http.server`,
-  userspace `tailscaled`, no root, no LLM/mining/P2P/Tor. Well inside a shared
-  seedbox's rules.
+- **Featherweight, rootless application, no prohibited category.** stdlib
+  `http.server`, no LLM/mining/P2P/Tor. A discipline inherited from the
+  shared-seedbox era and kept on `cairn`.
 - **No open directory listing.** Pages are served by exact-name allowlist; there
-  is no filesystem index.
+  is no filesystem index. The inbox is a designed, authenticated view — its
+  unauthenticated form reveals no names, counts, or rulings.
 
 Full rationale, invariants, and implementer latitude are in [`SPEC.md`](./SPEC.md).
 

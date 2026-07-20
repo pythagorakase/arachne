@@ -4,7 +4,7 @@ The thin Claude Code layer over the
 [Arachne decision loom](https://github.com/pythagorakase/arachne): it
 registers the shared MCP adapter (with your bearer token read locally at
 connect time — no secret ever ships in config) and installs the client skill
-that teaches the agent the publish → link → wait → wake workflow.
+that teaches the agent the publish → inbox → wait → wake workflow.
 
 The plugin is the *client* half only. Arachne is self-hosted: you run your own
 server on your own tailnet. Deploy that first

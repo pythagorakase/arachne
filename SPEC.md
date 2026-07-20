@@ -7,8 +7,9 @@ that must not be traded away (security, host-policy, and the wake guarantee).
 supervision — is the implementer's call.** Where this document shows code or
 commands, they are *illustrative*, not binding.
 
-Target host: the Whatbox seedbox (`proteus.whatbox.ca`, tailnet `tail342046`).
-Design is host-agnostic. See [`DEPLOY.md`](./DEPLOY.md) for deployment.
+Target host: `cairn`, a home Ubuntu box on tailnet `tail342046` (originally
+the Whatbox seedbox `proteus.whatbox.ca`, retired 2026-07-19). Design is
+host-agnostic. See [`DEPLOY.md`](./DEPLOY.md) for deployment.
 
 ---
 
@@ -48,11 +49,14 @@ relax them for convenience.
 - **No unauthenticated sensitive surface.** Tailscale device identity gates the
   remote transport, and an owner-only application token gates pages, rulings,
   and waiters on the host-wide loopback interface. Browser sessions use a
-  server-validated, two-day `Secure`, `HttpOnly`, `SameSite=Strict` cookie; the
-  token is never embedded in published HTML. Expiry must be enforced by the
-  server, not only by the browser's cookie lifetime. Nothing may be reachable
-  off the tailnet. (This also keeps it clear of the one Whatbox AUP clause that
-  bites hosted services — "a public directory service with no authentication.")
+  server-validated `Secure`, `HttpOnly`, `SameSite=Strict` cookie with a
+  fifteen-day window that **slides on active use**: a session presented past
+  its half-life is re-issued for the full window, so a regularly used device
+  never re-enrolls while an idle or lost one still ages out. The token is
+  never embedded in published HTML. Expiry must be enforced by the server, not
+  only by the browser's cookie lifetime. Nothing may be reachable off the
+  tailnet. (This also keeps it clear of the one Whatbox AUP clause that bites
+  hosted services — "a public directory service with no authentication.")
 - **No directory listing / no traversal.** Serve only an explicit allowlist of
   page files from the pages directory. Never expose a filesystem index or allow
   `..` escapes.
@@ -85,6 +89,13 @@ keep, but not mandated.)
 
 - **Serve pages.** Given a published decision page, serve it by name over the
   tailnet URL so a browser renders it. Only allowlisted page files; nothing else.
+- **Inbox at the root.** The stable root path is an authenticated mailbox:
+  briefs awaiting a ruling, and an archive **derived** from filed rulings — a
+  ruling carrying a page's issue token, filed at or after that page's
+  publication, archives it; re-publishing the issue reopens it. Filing the
+  ruling *is* the archive action: no deletion, move, or other mutating inbox
+  operation may exist. The unauthenticated root must stay human-friendly for a
+  lapsed bookmark while revealing nothing — no page names, counts, or rulings.
 - **Accept a ruling.** Accept a submission carrying at least: an **issue id**, a
   **human-readable record** (markdown), and the **raw form state** (structured).
   Persist it durably as retrievable artifacts.
@@ -176,8 +187,9 @@ Sol owns these choices — pick what's cleanest:
 - **Ruling storage** — flat files, SQLite, whatever is durable and out-of-repo.
 - **Supervision / keep-alive** — screen, tmux, user-systemd, or cron; must
   survive host reboot (see [`DEPLOY.md`](./DEPLOY.md)).
-- **Index page** — presence and styling are optional; the agent links pages
-  directly.
+- **Inbox presentation** — the §3 inbox behavior is required, but its styling,
+  title extraction, ordering, and issue-derivation details are the
+  implementer's; the agent may still link pages directly.
 - **Endpoint names & payload keys** — the §3 shapes are conventions, not law.
 
 ---
@@ -187,6 +199,13 @@ Sol owns these choices — pick what's cleanest:
 - Exposed **tailnet-only** via `tailscale serve`, TLS, at a stable MagicDNS name
   (`arachne.<tailnet>.ts.net`). Never `funnel`. The proxy target is verified
   HTTPS using a private localhost CA; an insecure HTTPS target is not allowed.
+- A **custom domain may front the same service without changing the exposure
+  invariant**: a DNS-only record (never a proxying CDN) pointing at the node's
+  tailnet address, terminated by a TLS proxy **bound exclusively to tailnet
+  interfaces**, with certificates issued via DNS-01 so no public listener ever
+  exists. The ts.net name remains valid in parallel; browser sessions are
+  per-hostname, so devices should bookmark one canonical host. Public reverse
+  proxies and Funnel remain forbidden.
 - On the shared seedbox, `tailscaled` runs **rootless in userspace-networking
   mode** (no TUN, no root). On a normal Ubuntu destination such as `cairn`,
   use its system-managed `tailscaled` and grant the deployment account the
@@ -230,6 +249,16 @@ service.)*
     private-CA-verified HTTPS target and rejects an untrusted replacement
     backend; a cryptographically valid but expired browser session is denied by
     the server.
+11. **Inbox derivation** — an authenticated root lists an unruled page as
+    awaiting; filing its ruling moves it to the archive with no other request;
+    re-publishing the same issue returns it to awaiting. An unauthenticated
+    root request gets the friendly shell and leaks no names or counts.
+12. **Sliding session** — a valid session past its half-life is transparently
+    re-issued for the full window on use; a fresh session is not; bearer
+    requests never mint cookies.
+13. **Inbox bootstrap** — a bootstrap link minted without a page lands the
+    device on the inbox; an inbox-bound ticket cannot unlock a page-bound
+    session or vice versa; the ticket stays single-use.
 
 ---
 
