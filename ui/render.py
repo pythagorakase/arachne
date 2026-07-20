@@ -12,11 +12,15 @@ from pathlib import Path
 from typing import Any
 
 
-# The inbox is server-rendered, script-free HTML; its policy is stricter than
-# the decision-page CSP because nothing on it ever needs to execute.
+# The inbox is server-rendered, then its application-owned inline script drives
+# same-origin manifest fetches, iframe selection, draft capture, and filing.
 INBOX_CSP = (
     "default-src 'none'; "
+    "script-src 'unsafe-inline'; "
     "style-src 'unsafe-inline'; "
+    "font-src 'self'; "
+    "connect-src 'self'; "
+    "frame-src 'self'; "
     "object-src 'none'; "
     "base-uri 'none'; "
     "form-action 'none'; "
@@ -47,6 +51,15 @@ _EMPTY_TEMPLATE = _load_asset("empty.html")
 _LOCKED_TEMPLATE = _load_asset("locked.html")
 _BOOTSTRAP_TEMPLATE = _load_asset("bootstrap.html")
 _INBOX_STYLE = _load_asset("inbox.css").strip()
+_INBOX_SCRIPT = _load_asset("inbox.js").strip()
+_FONT_ASSETS = frozenset(
+    {
+        "Megrim.ttf",
+        "Cinzel-wght.ttf",
+        "Spectral-Regular.ttf",
+        "Spectral-SemiBold.ttf",
+    }
+)
 
 
 def _fill_template(
@@ -102,19 +115,54 @@ def _format_moment(epoch: float) -> str:
 
 
 def _render_brief(entry: Mapping[str, Any], *, ruled: bool) -> str:
+    repo = entry.get("repo")
+    repo_text = repo if isinstance(repo, str) else ""
+    axis_count = entry.get("axis_count", 0)
+    if isinstance(axis_count, bool) or not isinstance(axis_count, int):
+        raise ValueError("inbox entry 'axis_count' must be an integer")
+    if axis_count < 0:
+        raise ValueError("inbox entry 'axis_count' must not be negative")
     if ruled:
-        moment = _format_moment(entry["ruled_at"])
-        meta = f"ruled {moment} · ruling {entry['ruling_sequence']}"
+        timestamp = f"ruled {_format_moment(entry['ruled_at'])}"
+        status = "archived"
+        ruling_sequence = str(entry["ruling_sequence"])
+        ruling_suffix = (
+            '<span class="brief-ruling-suffix">ruling '
+            f"{html.escape(ruling_sequence)}</span>"
+        )
     else:
-        meta = f"published {_format_moment(entry['published_at'])}"
+        timestamp = f"published {_format_moment(entry['published_at'])}"
+        status = "awaiting"
+        ruling_sequence = ""
+        ruling_suffix = ""
+    repo_pill = (
+        f'<span class="repo-pill">{html.escape(repo_text)}</span>'
+        if repo_text
+        else ""
+    )
     return _fill_template(
         "brief.html",
         _BRIEF_TEMPLATE,
         {
             "@@ARACHNE_BRIEF_NAME@@": html.escape(entry["name"], quote=True),
+            "@@ARACHNE_BRIEF_ISSUE_ATTR@@": html.escape(
+                entry["issue"], quote=True
+            ),
+            "@@ARACHNE_BRIEF_TITLE_ATTR@@": html.escape(
+                entry["title"], quote=True
+            ),
+            "@@ARACHNE_BRIEF_REPO_ATTR@@": html.escape(repo_text, quote=True),
+            "@@ARACHNE_BRIEF_STATUS@@": status,
+            "@@ARACHNE_BRIEF_AXIS_COUNT_ATTR@@": str(axis_count),
+            "@@ARACHNE_BRIEF_AXIS_COUNT@@": str(axis_count),
+            "@@ARACHNE_BRIEF_RULING_SEQUENCE@@": html.escape(
+                ruling_sequence, quote=True
+            ),
             "@@ARACHNE_BRIEF_ISSUE@@": html.escape(entry["issue"]),
             "@@ARACHNE_BRIEF_TITLE@@": html.escape(entry["title"]),
-            "@@ARACHNE_BRIEF_META@@": html.escape(meta),
+            "@@ARACHNE_BRIEF_REPO_PILL@@": repo_pill,
+            "@@ARACHNE_BRIEF_TIMESTAMP@@": html.escape(timestamp),
+            "@@ARACHNE_BRIEF_RULING_SUFFIX@@": ruling_suffix,
         },
     ).strip()
 
@@ -127,13 +175,14 @@ def _render_empty(message: str) -> str:
     ).strip()
 
 
-def _inbox_document(main_html: str) -> bytes:
+def _inbox_document(main_html: str, script: str = "") -> bytes:
     document = _fill_template(
         "inbox.html",
         _INBOX_TEMPLATE,
         {
             "@@ARACHNE_INBOX_STYLE@@": _INBOX_STYLE,
             "@@ARACHNE_INBOX_MAIN@@": main_html,
+            "@@ARACHNE_INBOX_SCRIPT@@": script,
         },
     )
     return document.encode("utf-8")
@@ -161,13 +210,27 @@ def render_inbox(
             "@@ARACHNE_ARCHIVED_ITEMS@@": archived_items,
         },
     ).strip()
-    return _inbox_document(main)
+    return _inbox_document(main, _INBOX_SCRIPT)
 
 
 def render_locked_inbox() -> bytes:
     """Render the non-disclosing shell shown without a live session."""
 
     return _inbox_document(_LOCKED_TEMPLATE.strip())
+
+
+def font_asset(name: str) -> bytes | None:
+    """Return one allowlisted bundled display font, or None for unknown names."""
+
+    if name not in _FONT_ASSETS:
+        return None
+    path = _ASSET_DIR / "fonts" / name
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"Arachne UI font asset is missing or unsafe: {name!r}")
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        raise RuntimeError(f"could not load Arachne UI font asset {name!r}") from exc
 
 
 def render_bootstrap(binding: str, destination: str) -> bytes:

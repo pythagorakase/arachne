@@ -1,5 +1,24 @@
-<li><a class="brief" href="/@@ARACHNE_BRIEF_NAME@@">
-  <span class="issue">@@ARACHNE_BRIEF_ISSUE@@</span>
-  <span class="text"><span class="title">@@ARACHNE_BRIEF_TITLE@@</span>
-  <span class="meta">@@ARACHNE_BRIEF_META@@</span></span>
-</a></li>
+<li class="brief-item" data-brief-item>
+  <button class="brief-card" type="button" aria-current="false"
+    data-brief-name="@@ARACHNE_BRIEF_NAME@@"
+    data-brief-issue="@@ARACHNE_BRIEF_ISSUE_ATTR@@"
+    data-brief-title="@@ARACHNE_BRIEF_TITLE_ATTR@@"
+    data-brief-repo="@@ARACHNE_BRIEF_REPO_ATTR@@"
+    data-brief-status="@@ARACHNE_BRIEF_STATUS@@"
+    data-axis-count="@@ARACHNE_BRIEF_AXIS_COUNT_ATTR@@"
+    data-ruling-sequence="@@ARACHNE_BRIEF_RULING_SEQUENCE@@">
+    <span class="brief-meta-row">
+      <span class="issue-chip">#@@ARACHNE_BRIEF_ISSUE@@</span>
+      @@ARACHNE_BRIEF_REPO_PILL@@
+      <time class="brief-time">@@ARACHNE_BRIEF_TIMESTAMP@@</time>
+    </span>
+    <span class="brief-title-row">
+      <span class="brief-title">@@ARACHNE_BRIEF_TITLE@@</span>
+      @@ARACHNE_BRIEF_RULING_SUFFIX@@
+    </span>
+    <span class="brief-progress" aria-label="Axis progress">
+      <span class="brief-progress-track"><span></span></span>
+      <span class="brief-progress-label">0/@@ARACHNE_BRIEF_AXIS_COUNT@@ axes</span>
+    </span>
+  </button>
+</li>

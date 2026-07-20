@@ -1,8 +1,96 @@
-<section>
-  <h2>Awaiting ruling · @@ARACHNE_PENDING_COUNT@@</h2>
-  <ul>@@ARACHNE_PENDING_ITEMS@@</ul>
-</section>
-<section class="archive">
-  <h2>Archive · @@ARACHNE_ARCHIVED_COUNT@@</h2>
-  <ul>@@ARACHNE_ARCHIVED_ITEMS@@</ul>
-</section>
+<main class="app-frame" data-arachne-shell>
+  <aside class="list-pane" data-list-pane aria-label="Decision briefs">
+    <header class="loom-brand">
+      <div class="wordmark">ARACHNE</div>
+      <div class="brand-tag">DECISION LOOM</div>
+    </header>
+    <div class="list-tabs" role="tablist" aria-label="Brief sections">
+      <button class="list-tab is-active" type="button" role="tab"
+        aria-selected="true" aria-controls="awaiting-briefs"
+        data-list-tab="awaiting">AWAITING · <span
+          data-list-count="awaiting">@@ARACHNE_PENDING_COUNT@@</span></button>
+      <button class="list-tab" type="button" role="tab"
+        aria-selected="false" aria-controls="archived-briefs"
+        data-list-tab="archive">ARCHIVE · <span
+          data-list-count="archive">@@ARACHNE_ARCHIVED_COUNT@@</span></button>
+    </div>
+    <div class="brief-lists">
+      <section class="brief-section" id="awaiting-briefs"
+        role="tabpanel" data-list-panel="awaiting">
+        <h2 class="visually-hidden">Awaiting ruling</h2>
+        <ul class="brief-list" data-brief-list="awaiting">@@ARACHNE_PENDING_ITEMS@@</ul>
+      </section>
+      <section class="brief-section" id="archived-briefs" role="tabpanel"
+        data-list-panel="archive" hidden>
+        <h2 class="visually-hidden">Archived rulings</h2>
+        <ul class="brief-list" data-brief-list="archive">@@ARACHNE_ARCHIVED_ITEMS@@</ul>
+      </section>
+    </div>
+  </aside>
+
+  <div class="pane-resizer" role="separator" tabindex="0"
+    aria-label="Resize brief list" aria-orientation="vertical"
+    aria-valuemin="240" aria-valuemax="440" aria-valuenow="320"
+    data-resizer="list"><span></span></div>
+
+  <section class="reading-pane" data-reading-region aria-label="Decision reading pane">
+    <header class="reading-toolbar">
+      <div class="reading-identity">
+        <span class="reading-breadcrumb" data-reading-breadcrumb>SELECT A BRIEF</span>
+        <span class="status-pill" data-reading-status hidden>AWAITING</span>
+      </div>
+      <nav class="reading-controls" aria-label="Brief navigation">
+        <button type="button" title="Previous awaiting brief"
+          aria-label="Previous awaiting brief" data-brief-previous>‹</button>
+        <button type="button" title="Next awaiting brief"
+          aria-label="Next awaiting brief" data-brief-next>›</button>
+        <a title="Open full page" aria-label="Open selected brief as a full page"
+          target="_blank" rel="noopener" data-brief-expand aria-disabled="true">
+          <span aria-hidden="true">⤢</span><span class="full-page-label">FULL PAGE</span>
+        </a>
+      </nav>
+    </header>
+    <div class="reading-stage">
+      <iframe class="brief-frame" title="Selected decision brief"
+        sandbox="allow-scripts" data-reading-frame hidden></iframe>
+      <div class="reading-empty" data-reading-empty>
+        <div class="empty-glyph" aria-hidden="true">◇</div>
+        <p>Select an awaiting brief to open its argument and ruling docket.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="pane-resizer" role="separator" tabindex="0"
+    aria-label="Resize ruling docket" aria-orientation="vertical"
+    aria-valuemin="260" aria-valuemax="420" aria-valuenow="316"
+    data-resizer="docket"><span></span></div>
+
+  <aside class="docket-pane" data-docket aria-label="Ruling docket">
+    <header class="docket-header">
+      <div class="docket-title">RULING DOCKET</div>
+      <div class="docket-meter" aria-label="Ruling completeness">
+        <div class="meter-track"><span data-docket-meter-fill></span></div>
+        <span class="meter-label" data-docket-meter-label>0 of 0 ruled</span>
+      </div>
+    </header>
+    <div class="docket-body">
+      <p class="docket-message" role="status" data-docket-message>
+        Select a brief to begin a ruling.
+      </p>
+      <div class="axis-list" data-axis-list></div>
+    </div>
+    <footer class="docket-footer">
+      <label class="overall-note" data-overall-note hidden>
+        <span>OVERALL NOTE</span>
+        <textarea rows="3" placeholder="Add an overall note…"
+          data-overall-textarea></textarea>
+      </label>
+      <button class="send-ruling" type="button" disabled data-send-ruling>
+        SEND RULING
+      </button>
+      <p class="draft-note" data-draft-note>
+        draft persists on this device · engage every axis to send
+      </p>
+    </footer>
+  </aside>
+</main>

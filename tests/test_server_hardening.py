@@ -247,9 +247,10 @@ class ServerProtocolHardeningTests(unittest.TestCase):
             "object-src 'none'",
             "base-uri 'none'",
             "frame-src 'none'",
-            "frame-ancestors 'none'",
+            "frame-ancestors 'self'",
         ):
             self.assertIn(directive, policy)
+        self.assertIn("default-src 'none'", policy)
 
     def test_rejected_post_closes_without_parsing_pipelined_request(self) -> None:
         body = b"{}"
@@ -511,6 +512,14 @@ class TLSServerTests(unittest.TestCase):
 
 
 class PublicationTransactionTests(unittest.TestCase):
+    def test_reserved_docket_option_ids_are_rejected(self) -> None:
+        for sentinel in sorted(page_contract.RESERVED_OPTION_IDS):
+            with self.subTest(sentinel=sentinel):
+                manifest = axis_manifest(f"reserved-{sentinel}")
+                manifest["axes"][0]["options"][0]["id"] = sentinel
+                with self.assertRaisesRegex(ValueError, "reserved docket sentinel"):
+                    page_contract.validate_axes_manifest(manifest)
+
     def test_v2_manifest_is_normalized_stored_and_read_from_the_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             pages = Path(temporary)

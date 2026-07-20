@@ -37,6 +37,7 @@ from ui import (
     BOOTSTRAP_CSP,
     INBOX_CSP,
     fallback_title,
+    font_asset,
     page_title,
     render_bootstrap,
     render_inbox,
@@ -76,7 +77,7 @@ DECISION_PAGE_CSP = (
     "base-uri 'none'; "
     "form-action 'self'; "
     "frame-src 'none'; "
-    "frame-ancestors 'none'"
+    "frame-ancestors 'self'"
 )
 
 
@@ -825,6 +826,9 @@ class ArachneHandler(BaseHTTPRequestHandler):
             self._serve_inbox()
             return
         self._require_authentication()
+        if path.startswith("/ui/fonts/"):
+            self._serve_font(path, parsed.query)
+            return
         if path.startswith("/axes/"):
             self._serve_axes(path, parsed.query)
             return
@@ -909,6 +913,25 @@ class ArachneHandler(BaseHTTPRequestHandler):
             "text/html; charset=utf-8",
             extra_headers={"Content-Security-Policy": DECISION_PAGE_CSP},
         )
+
+    def _serve_font(self, path: str, raw_query: str) -> None:
+        """Serve one application-owned font from the fixed UI allowlist."""
+
+        name = path.removeprefix("/ui/fonts/")
+        if raw_query or not name or "/" in name:
+            raise ClientProblem(
+                HTTPStatus.NOT_FOUND,
+                "not_found",
+                "no such Arachne UI font",
+            )
+        body = font_asset(name)
+        if body is None:
+            raise ClientProblem(
+                HTTPStatus.NOT_FOUND,
+                "not_found",
+                "no such Arachne UI font",
+            )
+        self._write(HTTPStatus.OK, body, "font/ttf")
 
     def _serve_axes(self, path: str, raw_query: str) -> None:
         """Return one published page's v2 axis manifest."""
@@ -996,10 +1019,28 @@ class ArachneHandler(BaseHTTPRequestHandler):
             # The issue recorded at publication is authoritative; filename
             # inference remains only as a fallback for pre-metadata pages.
             issue = read_page_issue(pages_dir, name) or _page_issue(name)
+            manifest = read_page_axes(pages_dir, name)
+            manifest_title = (
+                manifest.get("title") if isinstance(manifest, dict) else None
+            )
+            manifest_repo = (
+                manifest.get("repo") if isinstance(manifest, dict) else None
+            )
+            manifest_axes = (
+                manifest.get("axes") if isinstance(manifest, dict) else None
+            )
             entry = {
                 "name": name,
                 "issue": issue,
-                "title": page_title(candidate) or fallback_title(name, issue),
+                "title": (
+                    manifest_title
+                    if isinstance(manifest_title, str) and manifest_title
+                    else page_title(candidate) or fallback_title(name, issue)
+                ),
+                "repo": manifest_repo if isinstance(manifest_repo, str) else "",
+                "axis_count": (
+                    len(manifest_axes) if isinstance(manifest_axes, list) else 0
+                ),
                 "published_at": published_at,
             }
             filed = [
