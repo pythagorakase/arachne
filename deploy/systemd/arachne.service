@@ -1,6 +1,7 @@
 [Unit]
 Description=Arachne decision loom
 After=network-online.target
+Upholds=arachne-mcp.service
 
 [Service]
 Type=simple
