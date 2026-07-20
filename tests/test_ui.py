@@ -99,6 +99,18 @@ class UiStructureTests(unittest.TestCase):
             "relationship drift",
         )
 
+    def test_slot_validator_catches_digit_bearing_markers(self) -> None:
+        # A stray slot the renderer cannot fill must fail loud even when its
+        # name carries a digit (future docket slots like AXIS_2 / PANE_1).
+        from ui import render
+
+        with self.assertRaises(RuntimeError):
+            render._fill_template(
+                "probe",
+                "<p>@@ARACHNE_OK@@ @@ARACHNE_EXTRA_2@@</p>",
+                {"@@ARACHNE_OK@@": "x"},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

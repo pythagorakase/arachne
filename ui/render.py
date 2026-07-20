@@ -28,7 +28,7 @@ BOOTSTRAP_CSP = (
 )
 
 _ASSET_DIR = Path(__file__).resolve().parent
-_UI_MARKER = re.compile(r"@@ARACHNE_[A-Z_]+@@")
+_UI_MARKER = re.compile(r"@@ARACHNE_[A-Z0-9_]+@@")
 _PAGE_TITLE = re.compile(rb"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _PAGE_TITLE_SCAN_BYTES = 16_384
 
