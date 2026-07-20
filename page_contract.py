@@ -85,6 +85,37 @@ def _nonempty_string(value: object, path: str) -> str:
     return value.strip()
 
 
+def _reject_form_key_collisions(
+    axes: list[dict[str, Any]], overall_notes: bool
+) -> None:
+    """Reject a manifest whose axes derive colliding capture form keys.
+
+    The chrome builds a flat ``form`` dict keyed by ``<id>`` for each axis's
+    choice, ``<id>-notes`` when the axis takes notes, and a reserved ``overall``
+    key when overall_notes is set. Distinct axis ids can still collide in that
+    derived space — an axis ``scope`` with notes and an axis ``scope-notes``
+    both claim the key ``scope-notes`` — which would silently overwrite a ruling
+    value at capture time. Surface it loudly at publish instead.
+    """
+
+    claimed: dict[str, str] = {}
+
+    def claim(key: str, owner: str) -> None:
+        if key in claimed:
+            raise ValueError(
+                f"axes manifest generates colliding form key {key!r} "
+                f"(claimed by both {claimed[key]} and {owner})"
+            )
+        claimed[key] = owner
+
+    for axis in axes:
+        claim(axis["id"], f"axis {axis['id']!r}")
+        if axis["notes"]:
+            claim(f"{axis['id']}-notes", f"notes for axis {axis['id']!r}")
+    if overall_notes:
+        claim("overall", "overall notes")
+
+
 def validate_axes_manifest(manifest: object) -> dict[str, Any]:
     """Validate and normalize one v2 axis manifest.
 
@@ -178,6 +209,8 @@ def validate_axes_manifest(manifest: object) -> dict[str, Any]:
             }
         )
 
+    _reject_form_key_collisions(normalized_axes, overall_notes)
+
     normalized: dict[str, Any] = {
         "contract": "v2",
         "issue": issue,
@@ -248,11 +281,11 @@ def publish_html(
     The required axis manifest supplies the authoritative issue token. When an
     explicit *issue* is also provided, it must agree with that token.
 
-    Publications are serialized per process, and the commit order — remove
-    the old sidecar, install the page, record the new sidecar — keeps every
-    interruption window in the "no recorded issue" state, which degrades to
-    filename inference instead of pairing a page with another publication's
-    issue.
+    Publications are serialized per process, and the commit order — remove the
+    old sidecar (durably), install the page, record the new sidecar — keeps
+    every interruption window in the "no recorded metadata" state, so a crash
+    can never pair a page with another publication's issue or manifest; a page
+    left without a sidecar simply has no docket until it is republished.
     """
 
     normalized, normalized_axes = prepare_html(name, html, axes)
@@ -268,6 +301,18 @@ def publish_html(
         destination = pages_dir / name
         sidecar = metadata_path(pages_dir, name)
         sidecar.unlink(missing_ok=True)
+        # Durably order the stale-sidecar removal ahead of the new page: fsync
+        # the metadata directory now, so a crash after the page is installed
+        # but before the new sidecar is written recovers the new page with NO
+        # sidecar (a loud /axes 404), never the previous publication's stale
+        # metadata paired with the new page.
+        meta_dir = sidecar.parent
+        if meta_dir.is_dir():
+            directory = os.open(meta_dir, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{name}.", suffix=".tmp", dir=pages_dir
         )

@@ -727,6 +727,18 @@ class ArachneEndToEndTests(unittest.TestCase):
         unsupported_select["axes"][0]["select"] = "many"
         empty_option_id = axis_manifest("empty-option")
         empty_option_id["axes"][0]["options"][0]["id"] = ""
+        colliding_form_keys = axis_manifest("collide")
+        colliding_form_keys["axes"][0]["id"] = "scope"
+        colliding_form_keys["axes"][0]["notes"] = True
+        colliding_form_keys["axes"].append(
+            {
+                "id": "scope-notes",
+                "label": "Scope Notes",
+                "select": "one",
+                "notes": False,
+                "options": [{"id": "only", "label": "Only"}],
+            }
+        )
 
         malformed = {
             "bad contract": (bad_contract, "contract"),
@@ -734,6 +746,7 @@ class ArachneEndToEndTests(unittest.TestCase):
             "duplicate axis": (duplicate_axis, "duplicate axis id"),
             "unsupported select": (unsupported_select, "select"),
             "empty option id": (empty_option_id, "non-empty string"),
+            "colliding form keys": (colliding_form_keys, "colliding form key"),
         }
         for label, (manifest, diagnostic) in malformed.items():
             with self.subTest(manifest=label), self.assertRaises(
