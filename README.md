@@ -103,6 +103,7 @@ arachne/
   DEPLOY.md        ← portable host + Tailscale deployment and migration runbook
   MCP.md           ← shared MCP tools, authentication, and client setup
   server.py        ← the server (created by the implementer, per SPEC)
+  ui/              ← importable inbox/bootstrap HTML, CSS, and render boundary
   mcp_server.py    ← authenticated Streamable HTTP MCP adapter
   page_contract.py ← shared validation and atomic publication boundary
   bin/arm-wake.sh  ← the agent-side wake loop (per SPEC)
@@ -115,6 +116,12 @@ arachne/
   .claude-plugin/  ← marketplace manifest: this repo installs as a plugin source
   plugin/          ← Claude Code plugin (MCP registration + client skill)
 ```
+
+The application-owned UI is intentionally self-contained in [`ui/`](./ui/),
+including its markup, styling, browser bootstrap, and server-side rendering
+boundary. Import that folder when iterating in a design tool. Per-decision HTML
+stays in `pages/` because it is published runtime content rather than the shared
+application shell.
 
 Rulings, the generated authentication token, and wake cursors live outside the
 repository by default under `~/.local/state/arachne/`. Production can set
