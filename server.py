@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from page_contract import PAGE_NAME, publish_html, read_page_issue
+from page_contract import PAGE_NAME, publish_html, read_page_axes, read_page_issue
 from ui import (
     BOOTSTRAP_CSP,
     INBOX_CSP,
@@ -825,6 +825,9 @@ class ArachneHandler(BaseHTTPRequestHandler):
             self._serve_inbox()
             return
         self._require_authentication()
+        if path.startswith("/axes/"):
+            self._serve_axes(path, parsed.query)
+            return
         self._serve_page(path)
 
     def _serve_ruling(self, path: str, raw_query: str) -> None:
@@ -906,6 +909,26 @@ class ArachneHandler(BaseHTTPRequestHandler):
             "text/html; charset=utf-8",
             extra_headers={"Content-Security-Policy": DECISION_PAGE_CSP},
         )
+
+    def _serve_axes(self, path: str, raw_query: str) -> None:
+        """Return one published page's v2 axis manifest."""
+
+        name = path.removeprefix("/axes/")
+        if raw_query:
+            raise ClientProblem(
+                HTTPStatus.NOT_FOUND,
+                "not_found",
+                "no such published axis manifest",
+            )
+        self._page_candidate(name)
+        axes = read_page_axes(self.arachne.config.pages_dir, name)
+        if axes is None:
+            raise ClientProblem(
+                HTTPStatus.NOT_FOUND,
+                "not_found",
+                "no axis manifest is recorded for that decision page",
+            )
+        self._json(HTTPStatus.OK, axes)
 
     def _serve_inbox(self) -> None:
         """Render the stable mailbox: authenticated state only, no secrets.
@@ -1099,13 +1122,16 @@ class ArachneHandler(BaseHTTPRequestHandler):
         payload = self._read_json_payload("POST /pages", "decision page")
         if (
             not isinstance(payload, dict)
-            or not {"name", "html"} <= set(payload)
-            or not set(payload) <= {"name", "html", "issue"}
+            or not {"name", "html", "axes"} <= set(payload)
+            or not set(payload) <= {"name", "html", "axes", "issue"}
         ):
             raise ClientProblem(
                 HTTPStatus.BAD_REQUEST,
                 "invalid_page",
-                "the publication request must contain name, html, and optionally issue",
+                (
+                    "the publication request must contain name, html, and axes, "
+                    "and may optionally contain issue"
+                ),
             )
         name = payload["name"]
         html = payload["html"]
@@ -1117,7 +1143,11 @@ class ArachneHandler(BaseHTTPRequestHandler):
             )
         try:
             publication = publish_html(
-                name, html, self.arachne.config.pages_dir, issue=payload.get("issue")
+                name,
+                html,
+                self.arachne.config.pages_dir,
+                payload["axes"],
+                issue=payload.get("issue"),
             )
         except ValueError as exc:
             raise ClientProblem(
@@ -1131,7 +1161,6 @@ class ArachneHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "page": publication.name,
                 "issue": publication.issue,
-                "rewritten_references": publication.replacements,
             },
         )
 

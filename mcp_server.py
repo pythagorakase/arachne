@@ -244,9 +244,13 @@ class ArachneClient:
         return await self._json_request("GET", f"/rulings/{sequence}")
 
     async def publish_decision(
-        self, name: str, html: str, issue: str | None
+        self,
+        name: str,
+        html: str,
+        axes: dict[str, Any],
+        issue: str | None = None,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"name": name, "html": html}
+        payload: dict[str, Any] = {"name": name, "html": html, "axes": axes}
         if issue is not None:
             payload["issue"] = issue
         result = await self._json_request(
@@ -457,15 +461,18 @@ def create_app(settings: Settings) -> Starlette:
 
     @mcp.tool(annotations=annotations_write, structured_output=True)
     async def publish_decision(
-        name: str, html: str, issue: str | None = None
+        name: str,
+        html: str,
+        axes: dict[str, Any],
+        issue: str | None = None,
     ) -> dict[str, Any]:
         """Validate and atomically publish trusted decision HTML on Arachne.
 
-        Pass the issue token the page will file so the inbox can pair the
-        ruling with this page regardless of the filename.
+        The required v2 axis manifest supplies the issue token. If issue is
+        also passed, it must agree with the manifest.
         """
 
-        return await client.publish_decision(name, html, issue)
+        return await client.publish_decision(name, html, axes, issue)
 
     @mcp.tool(annotations=annotations_write, structured_output=True)
     async def bootstrap_url(page: str | None = None) -> dict[str, Any]:

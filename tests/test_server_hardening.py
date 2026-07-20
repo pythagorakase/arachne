@@ -17,10 +17,29 @@ from unittest.mock import patch
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+import page_contract
 import server as arachne_server
 
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+def axis_manifest(issue: str) -> dict:
+    return {
+        "contract": "v2",
+        "issue": issue,
+        "title": f"Decision {issue}",
+        "overall_notes": False,
+        "axes": [
+            {
+                "id": "choice",
+                "label": "Choice",
+                "select": "one",
+                "notes": False,
+                "options": [{"id": "accept", "label": "Accept"}],
+            }
+        ],
+    }
 
 
 def free_port() -> int:
@@ -492,12 +511,39 @@ class TLSServerTests(unittest.TestCase):
 
 
 class PublicationTransactionTests(unittest.TestCase):
+    def test_v2_manifest_is_normalized_stored_and_read_from_the_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pages = Path(temporary)
+            manifest = axis_manifest("sidecar")
+            manifest.pop("overall_notes")
+            publication = page_contract.publish_html(
+                "decision_sidecar.html",
+                "<!doctype html><main>Argument only</main>",
+                pages,
+                manifest,
+            )
+
+            expected = {**manifest, "overall_notes": False}
+            self.assertEqual(publication.issue, "sidecar")
+            self.assertEqual(
+                page_contract.read_page_issue(pages, "decision_sidecar.html"),
+                "sidecar",
+            )
+            self.assertEqual(
+                page_contract.read_page_axes(pages, "decision_sidecar.html"),
+                expected,
+            )
+            sidecar = json.loads(
+                page_contract.metadata_path(
+                    pages, "decision_sidecar.html"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(sidecar, {"issue": "sidecar", "axes": expected})
+
     def test_concurrent_same_name_publications_never_interleave(self) -> None:
         # PR #10 second-review P1: page and sidecar are two commits; racing
         # same-name publications must never pair one publication's page with
         # another's issue.
-        import page_contract
-
         with tempfile.TemporaryDirectory() as temporary:
             pages = Path(temporary)
             errors: list[Exception] = []
@@ -505,13 +551,15 @@ class PublicationTransactionTests(unittest.TestCase):
             def publish_variant(marker: str) -> None:
                 html = (
                     f"<!doctype html><p>variant {marker}</p>"
-                    "<script>localStorage.setItem('d','1');"
-                    "fetch('/ruling', {method: 'POST'});</script>"
                 )
                 try:
                     for _ in range(80):
                         page_contract.publish_html(
-                            "decision_race.html", html, pages, issue=marker
+                            "decision_race.html",
+                            html,
+                            pages,
+                            axis_manifest(marker),
+                            issue=marker,
                         )
                 except Exception as exc:  # noqa: BLE001 - surfaced via assert
                     errors.append(exc)
@@ -527,6 +575,10 @@ class PublicationTransactionTests(unittest.TestCase):
             self.assertEqual(errors, [])
             recorded = page_contract.read_page_issue(pages, "decision_race.html")
             self.assertIn(recorded, {"alpha", "beta"})
+            axes = page_contract.read_page_axes(pages, "decision_race.html")
+            self.assertIsNotNone(axes)
+            assert axes is not None
+            self.assertEqual(axes["issue"], recorded)
             final_html = (pages / "decision_race.html").read_text(encoding="utf-8")
             self.assertIn(f"variant {recorded}", final_html)
 

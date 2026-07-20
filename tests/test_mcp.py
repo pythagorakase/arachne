@@ -19,7 +19,14 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from mcp_server import ADAPTER_VERSION, _read_owner_token
-from tests.test_e2e import RunningArachne, bearer, free_port, post_ruling
+from page_contract import read_page_axes
+from tests.test_e2e import (
+    RunningArachne,
+    axis_manifest,
+    bearer,
+    free_port,
+    post_ruling,
+)
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -191,16 +198,16 @@ class ArachneMCPTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(status["health"]["ok"])
             self.assertEqual(status["backlog"]["rulings"], [])
 
-            html = """<!doctype html><script>
-            localStorage.setItem('draft', 'yes');
-            fetch('http://localhost:8788/ruling', {method: 'POST'});
-            </script>"""
+            html = """<!doctype html><title>MCP decision</title>
+            <main><h1>Choose</h1><p>Argument only.</p></main>"""
+            axes = axis_manifest("mcp-476")
             published = self.structured(
                 await session.call_tool(
                     "publish_decision",
                     arguments={
                         "name": "decision_mcp.html",
                         "html": html,
+                        "axes": axes,
                         "issue": "mcp-476",
                     },
                 )
@@ -211,7 +218,14 @@ class ArachneMCPTests(unittest.IsolatedAsyncioTestCase):
                 published["url"],
                 "https://arachne.example.test/decision_mcp.html",
             )
-            self.assertIn("fetch('/ruling'", (self.pages / "decision_mcp.html").read_text())
+            self.assertEqual(
+                (self.pages / "decision_mcp.html").read_text(encoding="utf-8"),
+                html,
+            )
+            self.assertEqual(
+                read_page_axes(self.pages, "decision_mcp.html"),
+                axes,
+            )
 
             bootstrap = self.structured(
                 await session.call_tool(
