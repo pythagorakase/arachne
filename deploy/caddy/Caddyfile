@@ -2,8 +2,12 @@
 #
 # Replace every @@...@@ placeholder before installing at /etc/caddy/Caddyfile:
 #   @@TAILNET_IPV4@@       cairn's Tailscale address (`tailscale ip -4`)
-#   @@ARACHNE_CA_FILE@@    the private localhost CA bundle Arachne's TLS uses,
-#                          e.g. /home/<user>/.local/state/arachne-tls/ca-cert.pem
+#   @@ARACHNE_CA_FILE@@    a caddy-readable COPY of Arachne's public CA
+#                          certificate, e.g. /etc/caddy/arachne-ca.pem —
+#                          the caddy service user cannot (and must not) read
+#                          the owner-only ~/.local/state/arachne-tls/ dir;
+#                          copy ca-cert.pem (public material only, never keys)
+#                          and re-copy it if the private CA is ever rotated.
 #
 # Invariants this file must preserve (SPEC §6):
 #   - bind ONLY the tailnet address — never 0.0.0.0, never a LAN/public interface

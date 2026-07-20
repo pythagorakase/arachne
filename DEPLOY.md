@@ -584,20 +584,44 @@ Three properties make this shape spec-compliant (SPEC §6):
 
 ### 2. Caddy on `cairn` (root-managed; fine on an owned host)
 
+Distro Caddy packages are too old for `caddy add-package` (Ubuntu ships a
+2.6-era build without it). Install the apt package for its systemd unit,
+user, and directories, then divert the binary and drop in an official
+build-service binary that bakes in the Cloudflare DNS module:
+
 ```bash
-sudo apt install caddy                      # official Caddy apt repository
-sudo caddy add-package github.com/caddy-dns/cloudflare
-sudo install -m 600 -o root -g root /dev/null /etc/caddy/cloudflare.env
-sudo sh -c 'echo CLOUDFLARE_API_TOKEN=<token> > /etc/caddy/cloudflare.env'
-sudo systemctl edit caddy                   # add: [Service] EnvironmentFile=/etc/caddy/cloudflare.env
+sudo apt install caddy                      # unit + caddy user + /etc/caddy
+arch=$(dpkg --print-architecture)           # amd64 / arm64
+curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=${arch}&p=github.com/caddy-dns/cloudflare" \
+  -o /tmp/caddy-custom && chmod +x /tmp/caddy-custom
+/tmp/caddy-custom list-modules | grep dns.providers.cloudflare   # must print
+sudo dpkg-divert --divert /usr/bin/caddy.dpkg --rename /usr/bin/caddy
+sudo install -m 755 -o root -g root /tmp/caddy-custom /usr/bin/caddy
+
+sudo sh -c 'umask 077; echo CLOUDFLARE_API_TOKEN=<token> > /etc/caddy/cloudflare.env'
+sudo chown root:root /etc/caddy/cloudflare.env
+sudo mkdir -p /etc/systemd/system/caddy.service.d
+printf '[Service]\nEnvironmentFile=/etc/caddy/cloudflare.env\n' | \
+  sudo tee /etc/systemd/system/caddy.service.d/cloudflare.conf >/dev/null
+sudo systemctl daemon-reload
+
+# The caddy service user cannot read Arachne's owner-only state dir; give it
+# a copy of the PUBLIC CA certificate only (never key material):
+sudo install -m 644 -o root -g root \
+  ~/.local/state/arachne-tls/ca-cert.pem /etc/caddy/arachne-ca.pem
 ```
 
 Install `deploy/caddy/Caddyfile` at `/etc/caddy/Caddyfile` after replacing the
-`@@...@@` placeholders (tailnet IPv4, the private-CA bundle path, and — only if
-the MCP adapter should also ride the custom name — the MCP port). The proxy
-target is the same verified-HTTPS loopback backend Tailscale Serve uses;
-Caddy verifies it against the private CA, so a different process claiming
-port 8788 cannot impersonate Arachne here either.
+`@@...@@` placeholders (tailnet IPv4 and `/etc/caddy/arachne-ca.pem`; uncomment
+the second site block only if the MCP adapter should also ride the custom
+name). The proxy target is the same verified-HTTPS loopback backend Tailscale
+Serve uses; Caddy verifies it against the private CA, so a different process
+claiming port 8788 cannot impersonate Arachne here either. Validate with the
+token exported (`set -a; . /etc/caddy/cloudflare.env; set +a; caddy validate
+--config /etc/caddy/Caddyfile --adapter caddyfile`) — an ad-hoc validate
+without it fails on an empty token even when the config is correct. Re-copy
+`arachne-ca.pem` if the private CA is ever rotated, and expect apt to hold the
+diverted binary (`caddy.dpkg`) while renewals ride the custom build.
 
 ```bash
 sudo systemctl reload caddy
