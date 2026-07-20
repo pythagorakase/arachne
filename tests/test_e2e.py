@@ -429,6 +429,25 @@ class ArachneEndToEndTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(returned, manifest)
 
+        with urlopen(
+            Request(
+                f"{self.service.url}/{name}",
+                headers=bearer(self.service.token),
+            ),
+            timeout=1,
+        ) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn(b"Argument only", response.read())
+            page_policy = response.headers["Content-Security-Policy"]
+        self.assertIn("default-src 'none'", page_policy)
+        self.assertIn("frame-ancestors 'self'", page_policy)
+
+        status, inbox, _ = self._get_inbox(bearer(self.service.token))
+        self.assertEqual(status, 200)
+        self.assertIn('data-axis-count="1"', inbox)
+        self.assertIn("Arachne tests", inbox)
+        self.assertIn("/axes/", inbox)
+
         cookie = craft_session_cookie(self.service.token, int(time.time()) + 3600)
         with urlopen(
             Request(
@@ -455,17 +474,36 @@ class ArachneEndToEndTests(unittest.TestCase):
         status, body, headers = self._get_inbox(bearer(self.service.token))
         self.assertEqual(status, 200)
         self.assertIn("text/html", headers["Content-Type"])
+        policy = headers["Content-Security-Policy"]
+        for directive in (
+            "default-src 'none'",
+            "script-src 'unsafe-inline'",
+            "connect-src 'self'",
+            "frame-src 'self'",
+            "font-src 'self'",
+            "object-src 'none'",
+            "base-uri 'none'",
+            "frame-ancestors 'none'",
+        ):
+            self.assertIn(directive, policy)
         self.assertIn("decision_476.html", body)
         self.assertIn("Arachne test", body)
-        self.assertIn("Awaiting ruling · 1", body)
-        self.assertIn("Archive · 0", body)
+        self.assertIn('data-list-count="awaiting">1</span>', body)
+        self.assertIn('data-list-count="archive">0</span>', body)
+        self.assertIn('class="app-frame" data-arachne-shell', body)
+        self.assertIn('class="brief-frame"', body)
+        self.assertIn("data-axis-list", body)
+        self.assertNotIn("@@ARACHNE_", body)
 
         post_ruling(self.service.url, self.service.token, "476")
         status, body, _ = self._get_inbox(bearer(self.service.token))
-        self.assertIn("Awaiting ruling · 0", body)
+        self.assertIn('data-list-count="awaiting">0</span>', body)
         self.assertIn("The loom is quiet", body)
-        self.assertIn("Archive · 1", body)
-        self.assertLess(body.index("Archive"), body.index("decision_476.html"))
+        self.assertIn('data-list-count="archive">1</span>', body)
+        self.assertLess(
+            body.index('data-list-panel="archive"'),
+            body.index("decision_476.html"),
+        )
 
         # Re-publishing a brief for an already-ruled issue reopens it: the
         # archive is derived from ruling-after-publication, never mutated.
@@ -475,9 +513,27 @@ class ArachneEndToEndTests(unittest.TestCase):
             encoding="utf-8",
         )
         status, body, _ = self._get_inbox(bearer(self.service.token))
-        self.assertIn("Awaiting ruling · 1", body)
+        self.assertIn('data-list-count="awaiting">1</span>', body)
         self.assertIn("Round two", body)
-        self.assertIn("Archive · 0", body)
+        self.assertIn('data-list-count="archive">0</span>', body)
+
+    def test_allowlisted_ui_font_is_authenticated_and_served_as_truetype(self) -> None:
+        with self.assertRaises(HTTPError) as unauthenticated:
+            urlopen(f"{self.service.url}/ui/fonts/Megrim.ttf", timeout=1)
+        self.assertEqual(unauthenticated.exception.code, 401)
+
+        with urlopen(
+            Request(
+                f"{self.service.url}/ui/fonts/Megrim.ttf",
+                headers=bearer(self.service.token),
+            ),
+            timeout=1,
+        ) as response:
+            body = response.read()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers["Content-Type"], "font/ttf")
+        self.assertGreater(len(body), 10_000)
+        self.assertEqual(body[:4], b"\x00\x01\x00\x00")
 
     def test_inbox_without_session_is_a_friendly_shell(self) -> None:
         with self.assertRaises(HTTPError) as raised:
@@ -511,7 +567,7 @@ class ArachneEndToEndTests(unittest.TestCase):
         renewed_pair = renewed.split(";", 1)[0]
         status, body, _ = self._get_inbox({"Cookie": renewed_pair})
         self.assertEqual(status, 200)
-        self.assertIn("Awaiting ruling", body)
+        self.assertIn("data-arachne-shell", body)
 
         fresh = craft_session_cookie(self.service.token, now + window - 5)
         request = Request(
@@ -570,7 +626,7 @@ class ArachneEndToEndTests(unittest.TestCase):
             cookie = response.headers["Set-Cookie"].split(";", 1)[0]
         status, body, _ = self._get_inbox({"Cookie": cookie})
         self.assertEqual(status, 200)
-        self.assertIn("Awaiting ruling", body)
+        self.assertIn("data-arachne-shell", body)
 
         with self.assertRaises(HTTPError) as reused:
             urlopen(request, timeout=1)
@@ -609,8 +665,8 @@ class ArachneEndToEndTests(unittest.TestCase):
         # Republish "at" the ruling's millisecond but 600µs later.
         os.utime(page, ns=(int(moment * 1e9), int((moment + 0.0006) * 1e9)))
         status, body, _ = self._get_inbox(bearer(self.service.token))
-        self.assertIn("Archive · 1", body)
-        self.assertIn("Awaiting ruling · 0", body)
+        self.assertIn('data-list-count="archive">1</span>', body)
+        self.assertIn('data-list-count="awaiting">0</span>', body)
 
     def test_recorded_issue_pairs_ruling_regardless_of_filename(self) -> None:
         # PR #10 review repro (Sol): a contract-valid slug-only page name
@@ -634,7 +690,7 @@ class ArachneEndToEndTests(unittest.TestCase):
         post_ruling(self.service.url, self.service.token, "476")
         status, body, _ = self._get_inbox(bearer(self.service.token))
         self.assertLess(
-            body.index("Archive"),
+            body.index('data-list-panel="archive"'),
             body.index("decision_relationship_drift.html"),
         )
 
@@ -658,7 +714,7 @@ class ArachneEndToEndTests(unittest.TestCase):
         status, body, _ = self._get_inbox(bearer(self.service.token))
         self.assertLess(
             body.index("decision_relationship_drift.html"),
-            body.index("Archive"),
+            body.index('data-list-panel="archive"'),
         )
 
         # Sidecar metadata is never servable, and an explicit issue must agree
@@ -729,7 +785,7 @@ class ArachneEndToEndTests(unittest.TestCase):
         empty_option_id["axes"][0]["options"][0]["id"] = ""
         colliding_form_keys = axis_manifest("collide")
         colliding_form_keys["axes"][0]["id"] = "scope"
-        colliding_form_keys["axes"][0]["notes"] = True
+        colliding_form_keys["axes"][0]["notes"] = False
         colliding_form_keys["axes"].append(
             {
                 "id": "scope-notes",

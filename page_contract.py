@@ -17,6 +17,9 @@ PAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.html\Z")
 # a dot-directory the page allowlist can never serve: PAGE_NAME requires a
 # leading alphanumeric and the router rejects multi-segment paths.
 METADATA_DIRECTORY = ".meta"
+# Mirrors the universal escape sentinels in ui/inbox.js. These values are a
+# shared docket contract and must stay in sync with the client-side guard.
+RESERVED_OPTION_IDS = frozenset({"deferred", "discuss"})
 
 # Page and sidecar are two files, so a publication is two commits. This lock
 # serializes whole publications within a process (the server is the only
@@ -91,11 +94,12 @@ def _reject_form_key_collisions(
     """Reject a manifest whose axes derive colliding capture form keys.
 
     The chrome builds a flat ``form`` dict keyed by ``<id>`` for each axis's
-    choice, ``<id>-notes`` when the axis takes notes, and a reserved ``overall``
-    key when overall_notes is set. Distinct axis ids can still collide in that
-    derived space — an axis ``scope`` with notes and an axis ``scope-notes``
-    both claim the key ``scope-notes`` — which would silently overwrite a ruling
-    value at capture time. Surface it loudly at publish instead.
+    choice, ``<id>-notes`` for every axis because Discuss can always attach a
+    note, and a reserved ``overall`` key when overall_notes is set. Distinct
+    axis ids can still collide in that derived space — axes ``scope`` and
+    ``scope-notes`` both claim the key ``scope-notes`` — which would silently
+    overwrite a ruling value at capture time. Surface it loudly at publish
+    instead.
     """
 
     claimed: dict[str, str] = {}
@@ -110,8 +114,7 @@ def _reject_form_key_collisions(
 
     for axis in axes:
         claim(axis["id"], f"axis {axis['id']!r}")
-        if axis["notes"]:
-            claim(f"{axis['id']}-notes", f"notes for axis {axis['id']!r}")
+        claim(f"{axis['id']}-notes", f"notes for axis {axis['id']!r}")
     if overall_notes:
         claim("overall", "overall notes")
 
@@ -186,6 +189,10 @@ def validate_axes_manifest(manifest: object) -> dict[str, Any]:
                 required={"id", "label"},
             )
             option_id = _nonempty_string(option["id"], f"{option_path}.id")
+            if option_id in RESERVED_OPTION_IDS:
+                raise ValueError(
+                    f"{option_path}.id {option_id!r} is a reserved docket sentinel"
+                )
             if option_id in option_ids:
                 raise ValueError(
                     f"{axis_path} contains duplicate option id {option_id!r}"
