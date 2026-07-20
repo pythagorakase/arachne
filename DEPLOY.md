@@ -1,5 +1,11 @@
 # Arachne — Deployment Runbook
 
+> **Current deployment: `cairn`** (home Ubuntu box, system `tailscaled`,
+> user-systemd supervision), cut over 2026-07-19 as a deliberate fresh-state
+> migration; the seedbox's final rulings are archived client-side. The
+> MacBook-bridge and seedbox sections below are retained as the historical
+> runbook and for teardown reference.
+
 How to make Arachne always-on and reachable from the owner's devices,
 tailnet-only. The durable deployment is the Ubuntu host `cairn`; the MacBook
 bridge is retained only as rollback state. The older Whatbox procedure remains
@@ -19,7 +25,7 @@ Tailscale TLS; Ubuntu should restore the verified private-CA backend.
 
 ---
 
-## Current MacBook bridge
+## Historical: MacBook bridge (retired)
 
 Use one owner-only `~/.config/arachne/deployment.env` for both the core and MCP
 adapter. Avoid ports already occupied by an older local decision server. For
@@ -218,14 +224,17 @@ export ARACHNE_PUBLIC_URL=$ARACHNE_URL
 
 Do not paste the token into chat or a PR. To establish a browser session, open a
 bootstrap link directly (the secret stays in the URL fragment and is removed
-before the decision page loads):
+before the page loads):
 
 ```bash
-bin/bootstrap-url.py --open decision_476_relationship_drift.html
+bin/bootstrap-url.py --open                                      # inbox at /
+bin/bootstrap-url.py --open decision_476_relationship_drift.html # deep link
 ```
 
-The resulting session expires after two days in both the cookie and the
-server-validated credential. Run the helper once per browser/device.
+The resulting session lasts fifteen days in both the cookie and the
+server-validated credential, and slides on active use: any authenticated visit
+past the half-life re-issues the full window. Run the helper once per
+browser/device; a device that opens the inbox regularly never re-enrolls.
 
 ### 7. Survive reboot + self-heal (example: cron; mechanism is latitude)
 The checked-in `keepalive.sh` idempotently (re)starts `tailscaled`, configures
@@ -538,6 +547,130 @@ deliberate fresh-state migration is chosen instead, first prove no source ruling
 is unconsumed, reset/reconcile the orchestrator cursor to the destination's
 sequence, rotate the token, and bootstrap every browser. Never combine an empty
 ruling store with the old cursor.
+
+## Custom tailnet-only domain (`arachne.pythagora.net`)
+
+The stable inbox deserves a stable, memorable name. This section fronts the
+`cairn` deployment with a Cloudflare-managed hostname **without changing the
+exposure invariant**: the record is DNS-only, the TLS terminator binds only the
+tailnet interface, and certificates arrive via DNS-01, so no public listener
+ever exists. A device still needs Tailscale to reach it; the ts.net name keeps
+working in parallel.
+
+Three properties make this shape spec-compliant (SPEC §6):
+
+- **DNS-only record, never proxied.** The A record points at `cairn`'s tailnet
+  address (`100.64.0.0/10`), which is unroutable from the public internet. An
+  orange-cloud (proxied) record would both fail — Cloudflare's edge cannot
+  reach a tailnet address — and constitute the public reverse proxy the spec
+  forbids. Publishing the tailnet IP in public DNS discloses tailnet
+  membership, not reachability; that trade is accepted.
+- **Caddy binds the tailnet address only.** Never `0.0.0.0` — a wildcard bind
+  would expose the service to `cairn`'s LAN. The systemd unit's
+  `CAP_NET_BIND_SERVICE` covers port 443 on that interface.
+- **DNS-01 issuance.** Let's Encrypt validates domain control through a TXT
+  record Caddy writes via a scoped Cloudflare API token. No inbound HTTP-01
+  challenge, therefore no public port 80/443, is ever required.
+
+### 1. Cloudflare (dashboard, one-time)
+
+1. Find `cairn`'s tailnet IPv4: `tailscale ip -4` on `cairn`.
+2. In the `pythagora.net` zone add an **A** record: name `arachne`, content
+   `<tailnet IPv4>`, proxy status **DNS only** (grey cloud). Do **not** add an
+   AAAA record unless the Caddyfile also binds the tailnet IPv6 address — an
+   advertised address with no listener stalls IPv6-capable clients until IPv4
+   fallback.
+3. Create an API token scoped to exactly this zone: *Zone → DNS → Edit* plus
+   *Zone → Zone → Read*, zone resources limited to `pythagora.net`. This token
+   can only manage DNS records for the one zone; treat it as a secret anyway.
+
+### 2. Caddy on `cairn` (root-managed; fine on an owned host)
+
+Distro Caddy packages are too old for `caddy add-package` (Ubuntu ships a
+2.6-era build without it). Install the apt package for its systemd unit,
+user, and directories, then divert the binary and drop in an official
+build-service binary that bakes in the Cloudflare DNS module:
+
+```bash
+sudo apt install caddy                      # unit + caddy user + /etc/caddy
+arch=$(dpkg --print-architecture)           # amd64 / arm64
+curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=${arch}&p=github.com/caddy-dns/cloudflare" \
+  -o /tmp/caddy-custom && chmod +x /tmp/caddy-custom
+/tmp/caddy-custom list-modules | grep dns.providers.cloudflare   # must print
+sudo dpkg-divert --divert /usr/bin/caddy.dpkg --rename /usr/bin/caddy
+sudo install -m 755 -o root -g root /tmp/caddy-custom /usr/bin/caddy
+
+sudo sh -c 'umask 077; echo CLOUDFLARE_API_TOKEN=<token> > /etc/caddy/cloudflare.env'
+sudo chown root:root /etc/caddy/cloudflare.env
+sudo mkdir -p /etc/systemd/system/caddy.service.d
+printf '[Service]\nEnvironmentFile=/etc/caddy/cloudflare.env\n' | \
+  sudo tee /etc/systemd/system/caddy.service.d/cloudflare.conf >/dev/null
+sudo systemctl daemon-reload
+
+# The caddy service user cannot read Arachne's owner-only state dir; give it
+# a copy of the PUBLIC CA certificate only (never key material):
+sudo install -m 644 -o root -g root \
+  ~/.local/state/arachne-tls/ca-cert.pem /etc/caddy/arachne-ca.pem
+```
+
+Install `deploy/caddy/Caddyfile` at `/etc/caddy/Caddyfile` after replacing the
+`@@...@@` placeholders (tailnet IPv4 and `/etc/caddy/arachne-ca.pem`; uncomment
+the second site block only if the MCP adapter should also ride the custom
+name). The proxy target is the same verified-HTTPS loopback backend Tailscale
+Serve uses; Caddy verifies it against the private CA, so a different process
+claiming port 8788 cannot impersonate Arachne here either. Validate with the
+token exported — the env file is root-owned 0600, so validation must run as
+root: `sudo sh -c 'set -a; . /etc/caddy/cloudflare.env; set +a; caddy validate
+--config /etc/caddy/Caddyfile --adapter caddyfile'`. An unprivileged shell
+cannot even source the file, and a validate without the token fails on an
+empty-token provision error even when the config is correct. Because the apt
+package started the stock binary before the swap, the first activation must be
+a full `sudo systemctl restart caddy` — a reload would hand the
+Cloudflare-provider config to the old process, which cannot load it. Reloads
+are fine for every subsequent edit. Afterwards confirm with `ss -tlnp` that
+:443 listens only on the tailnet address and that **no :80 listener exists at
+all** — the Caddyfile disables the automatic HTTP→HTTPS redirect server
+(`auto_https disable_redirects`), since DNS-01 needs no HTTP listener and
+redirect servers are not guaranteed to inherit bind addresses on every Caddy
+version. Re-copy `arachne-ca.pem` if the private CA is ever rotated, and
+expect apt to hold the diverted binary (`caddy.dpkg`) while renewals ride the
+custom build.
+
+```bash
+sudo systemctl restart caddy   # first activation MUST be a restart (see below);
+                               # use `reload` only for subsequent config edits
+```
+
+If the MCP adapter is fronted too, append `arachne.pythagora.net:8443` to
+`ARACHNE_MCP_ALLOWED_HOSTS` and restart `arachne-mcp.service`.
+
+### 3. Switch the canonical URL
+
+Browser sessions are cookie-scoped per hostname, so pick **one** canonical
+name for bookmarks — the custom domain — and let ts.net remain a fallback:
+
+```bash
+# in the owner-only environment file loaded by both services and helpers
+ARACHNE_PUBLIC_URL=https://arachne.pythagora.net
+```
+
+Freshly minted bootstrap links and published-page URLs now use the custom
+name. Bootstrap each device once at the new hostname (`bin/bootstrap-url.py
+--open`), add `/` to the phone home screen, and the enrollment cycle ends
+there — the fifteen-day sliding session renews itself on use.
+
+### 4. Verify
+
+```bash
+dig +short arachne.pythagora.net            # the 100.x tailnet address, nothing else
+curl --fail https://arachne.pythagora.net/health          # on-tailnet: ok
+ss -tlnp | grep caddy                       # binds <tailnet IP>:443 only, no 0.0.0.0
+```
+
+From an off-tailnet network (phone with Tailscale toggled off), the name must
+not connect at all; a public scan of `cairn`'s internet-facing address must
+show no new open port. On-tailnet, an unauthenticated `GET /` returns the
+friendly locked shell and names nothing.
 
 ## Teardown
 

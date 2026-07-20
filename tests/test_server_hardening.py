@@ -491,5 +491,45 @@ class TLSServerTests(unittest.TestCase):
                 service.stop()
 
 
+class PublicationTransactionTests(unittest.TestCase):
+    def test_concurrent_same_name_publications_never_interleave(self) -> None:
+        # PR #10 second-review P1: page and sidecar are two commits; racing
+        # same-name publications must never pair one publication's page with
+        # another's issue.
+        import page_contract
+
+        with tempfile.TemporaryDirectory() as temporary:
+            pages = Path(temporary)
+            errors: list[Exception] = []
+
+            def publish_variant(marker: str) -> None:
+                html = (
+                    f"<!doctype html><p>variant {marker}</p>"
+                    "<script>localStorage.setItem('d','1');"
+                    "fetch('/ruling', {method: 'POST'});</script>"
+                )
+                try:
+                    for _ in range(80):
+                        page_contract.publish_html(
+                            "decision_race.html", html, pages, issue=marker
+                        )
+                except Exception as exc:  # noqa: BLE001 - surfaced via assert
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=publish_variant, args=(marker,))
+                for marker in ("alpha", "beta")
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+            self.assertEqual(errors, [])
+            recorded = page_contract.read_page_issue(pages, "decision_race.html")
+            self.assertIn(recorded, {"alpha", "beta"})
+            final_html = (pages / "decision_race.html").read_text(encoding="utf-8")
+            self.assertIn(f"variant {recorded}", final_html)
+
+
 if __name__ == "__main__":
     unittest.main()

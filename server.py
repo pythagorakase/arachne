@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import json
 import logging
 import os
@@ -32,16 +33,22 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from page_contract import PAGE_NAME, publish_html
+from page_contract import PAGE_NAME, publish_html, read_page_issue
 
 
 LOGGER = logging.getLogger("arachne")
 LOOPBACK_HOST = "127.0.0.1"
 MAX_REQUEST_BYTES = 1_048_576
 SESSION_COOKIE_NAME = "arachne_session"
-SESSION_COOKIE_SECONDS = 2 * 24 * 60 * 60
+SESSION_COOKIE_SECONDS = 15 * 24 * 60 * 60
+# A session presented past its half-life is re-issued for the full window, so a
+# regularly used device never re-enrolls while an idle one still ages out.
+SESSION_RENEWAL_SECONDS = SESSION_COOKIE_SECONDS // 2
 SESSION_COOKIE_VERSION = "v1"
 BOOTSTRAP_TICKET_SECONDS = 5 * 60
+# The inbox is addressed by "/" everywhere a page name may appear: as a
+# bootstrap-ticket binding, as a session destination, and in the router.
+INBOX_PATH = "/"
 TLS_HANDSHAKE_TIMEOUT = 5
 MAX_CONNECTION_WORKERS = 32
 ISSUE_SLUG = re.compile(r"[^A-Za-z0-9._-]+")
@@ -63,6 +70,18 @@ DECISION_PAGE_CSP = (
     "frame-src 'none'; "
     "frame-ancestors 'none'"
 )
+# The inbox is server-rendered, script-free HTML; its policy is stricter than
+# the decision-page CSP because nothing on it ever needs to execute.
+INBOX_CSP = (
+    "default-src 'none'; "
+    "style-src 'unsafe-inline'; "
+    "object-src 'none'; "
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "frame-ancestors 'none'"
+)
+PAGE_TITLE = re.compile(rb"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+PAGE_TITLE_SCAN_BYTES = 16_384
 
 
 class ClientProblem(ValueError):
@@ -143,6 +162,152 @@ def _environment_bool(name: str, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise ValueError(f"{name} must be true or false, got {value!r}")
+
+
+def _page_issue(name: str) -> str:
+    """Derive the issue token a page's rulings will carry.
+
+    ``decision_<issue>_<slug>.html`` and ``decision_<issue>.html`` yield
+    ``<issue>``; any other allowlisted name yields its stem, matching pages
+    (like the phone smoke check) whose scripts file the stem as their issue.
+    """
+
+    stem = name[: -len(".html")]
+    if stem.startswith("decision_"):
+        token = stem.removeprefix("decision_").split("_", 1)[0]
+        if token:
+            return token
+    return stem
+
+
+def _parse_submitted_at(text: object) -> float | None:
+    if not isinstance(text, str):
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _page_title(path: Path) -> str | None:
+    try:
+        with path.open("rb") as stream:
+            head = stream.read(PAGE_TITLE_SCAN_BYTES)
+    except OSError:
+        return None
+    match = PAGE_TITLE.search(head)
+    if match is None:
+        return None
+    text = html.unescape(match.group(1).decode("utf-8", "replace"))
+    collapsed = " ".join(text.split())
+    return collapsed[:120] or None
+
+
+def _fallback_title(name: str, issue: str) -> str:
+    stem = name[: -len(".html")]
+    remainder = stem.removeprefix("decision_").removeprefix(issue).strip("_-")
+    prettified = remainder.replace("_", " ").replace("-", " ").strip()
+    return prettified or stem
+
+
+def _format_moment(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+_INBOX_STYLE = """
+:root { color-scheme: dark; }
+* { box-sizing: border-box; margin: 0; }
+body { font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #131118; color: #e8e4f0; padding: 1.25rem;
+  max-width: 44rem; margin: 0 auto; }
+header { margin: .5rem 0 1.5rem; }
+h1 { font-size: 1.55rem; letter-spacing: .06em; }
+.tag { color: #8f87a8; font-size: .8rem; letter-spacing: .3em;
+  text-transform: uppercase; }
+h2 { font-size: .78rem; letter-spacing: .22em; text-transform: uppercase;
+  color: #8f87a8; margin: 1.6rem 0 .6rem; border-bottom: 1px solid #2a2536;
+  padding-bottom: .4rem; }
+ul { list-style: none; padding: 0; display: grid; gap: .5rem; }
+.brief { display: flex; gap: .9rem; align-items: center; background: #1c1926;
+  border: 1px solid #2a2536; border-radius: .65rem; padding: .85rem 1rem;
+  text-decoration: none; color: inherit; }
+.brief:hover, .brief:active { border-color: #6d5fae; background: #211d30; }
+.issue { font-family: ui-monospace, SFMono-Regular, monospace; font-size: .78rem;
+  color: #b7a9e8; background: #272138; border-radius: .4rem;
+  padding: .25rem .55rem; white-space: nowrap; }
+.text { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.title { font-weight: 600; overflow-wrap: anywhere; }
+.meta { font-size: .78rem; color: #8f87a8; }
+.archive .brief { opacity: .6; }
+.empty { color: #6f6787; font-style: italic; padding: .55rem 0; }
+.locked { margin: 1.4rem 0 .6rem; font-size: 1.05rem; }
+.hint { color: #8f87a8; }
+footer { margin-top: 2.6rem; font-size: .72rem; color: #57506b;
+  text-align: center; letter-spacing: .14em; }
+"""
+
+
+def _inbox_document(main_html: str) -> bytes:
+    document = f"""<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arachne — inbox</title>
+<style>{_INBOX_STYLE}</style>
+<body>
+<header><h1>Arachne</h1><p class="tag">decision loom</p></header>
+<main>
+{main_html}
+</main>
+<footer>tap a brief to open it · refresh for new arrivals</footer>
+</body>
+</html>
+"""
+    return document.encode("utf-8")
+
+
+def _render_brief_item(entry: dict[str, Any], *, ruled: bool) -> str:
+    name = html.escape(entry["name"], quote=True)
+    issue = html.escape(entry["issue"])
+    title = html.escape(entry["title"])
+    if ruled:
+        moment = _format_moment(entry["ruled_at"])
+        meta = f"ruled {moment} · ruling {entry['ruling_sequence']}"
+    else:
+        meta = f"published {_format_moment(entry['published_at'])}"
+    return (
+        f'<li><a class="brief" href="/{name}">'
+        f'<span class="issue">{issue}</span>'
+        f'<span class="text"><span class="title">{title}</span>'
+        f'<span class="meta">{html.escape(meta)}</span></span>'
+        f"</a></li>"
+    )
+
+
+def _render_inbox(
+    pending: list[dict[str, Any]], archived: list[dict[str, Any]]
+) -> bytes:
+    pending_items = "\n".join(
+        _render_brief_item(entry, ruled=False) for entry in pending
+    ) or '<li class="empty">The loom is quiet — no briefs await your ruling.</li>'
+    archived_items = "\n".join(
+        _render_brief_item(entry, ruled=True) for entry in archived
+    ) or '<li class="empty">Nothing has been ruled yet.</li>'
+    main = (
+        f"<section><h2>Awaiting ruling · {len(pending)}</h2>"
+        f"<ul>{pending_items}</ul></section>"
+        f'<section class="archive"><h2>Archive · {len(archived)}</h2>'
+        f"<ul>{archived_items}</ul></section>"
+    )
+    return _inbox_document(main)
+
+
+def _render_locked_inbox() -> bytes:
+    return _inbox_document(
+        '<p class="locked">This device holds no live Arachne session.</p>'
+        '<p class="hint">Ask your agent for a fresh bootstrap key, then return '
+        "here — the inbox unlocks itself.</p>"
+    )
 
 
 @dataclass(frozen=True)
@@ -269,37 +434,39 @@ class Authentication:
             return False
         return self.accepts_token(authorization.removeprefix("Bearer "))
 
-    def accepts_cookie(self, cookie_header: str | None) -> bool:
+    def cookie_expiry(self, cookie_header: str | None) -> int | None:
+        """Return the verified expiry of a live session cookie, else None."""
+
         if not cookie_header:
-            return False
+            return None
         cookies = SimpleCookie()
         try:
             cookies.load(cookie_header)
         except CookieError:
-            return False
+            return None
         morsel = cookies.get(SESSION_COOKIE_NAME)
         if morsel is None:
-            return False
+            return None
         try:
             version, expires_text, candidate_signature = morsel.value.split(".", 2)
             if version != SESSION_COOKIE_VERSION or not expires_text.isascii():
-                return False
+                return None
             if not expires_text.isdecimal() or str(int(expires_text)) != expires_text:
-                return False
+                return None
             expires_at = int(expires_text)
         except (TypeError, ValueError):
-            return False
+            return None
         expected_signature = self._session_signature(expires_at)
         if not SESSION_SIGNATURE.fullmatch(candidate_signature):
-            return False
+            return None
         if not hmac.compare_digest(candidate_signature, expected_signature):
-            return False
-        return expires_at > int(time.time())
+            return None
+        if expires_at <= int(time.time()):
+            return None
+        return expires_at
 
-    def accepts_request(self, handler: BaseHTTPRequestHandler) -> bool:
-        return self.accepts_bearer(handler.headers.get("Authorization")) or self.accepts_cookie(
-            handler.headers.get("Cookie")
-        )
+    def accepts_cookie(self, cookie_header: str | None) -> bool:
+        return self.cookie_expiry(cookie_header) is not None
 
     def issue_bootstrap_ticket(self, page: str) -> tuple[str, int]:
         """Create a short-lived, single-use browser bootstrap capability."""
@@ -573,6 +740,9 @@ class ArachneHandler(BaseHTTPRequestHandler):
         if extra_headers:
             for name, value in extra_headers.items():
                 self.send_header(name, value)
+        renewed_cookie = getattr(self, "_renewed_session_cookie", None)
+        if renewed_cookie is not None:
+            self.send_header("Set-Cookie", renewed_cookie)
         self.end_headers()
         if body and not head_only:
             self.wfile.write(body)
@@ -632,13 +802,16 @@ class ArachneHandler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
+        self._renewed_session_cookie: str | None = None
         self._dispatch_bodyless(self._get)
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
+        self._renewed_session_cookie = None
         self._post_body_consumed = False
         self._dispatch(self._post)
 
     def do_HEAD(self) -> None:  # noqa: N802 - stdlib handler API
+        self._renewed_session_cookie = None
         self._dispatch_bodyless(self._head)
 
     def _dispatch_bodyless(self, callback: Any) -> None:
@@ -685,7 +858,15 @@ class ArachneHandler(BaseHTTPRequestHandler):
         }
 
     def _require_authentication(self) -> None:
-        if self.arachne.authentication.accepts_request(self):
+        authentication = self.arachne.authentication
+        if authentication.accepts_bearer(self.headers.get("Authorization")):
+            return
+        expires_at = authentication.cookie_expiry(self.headers.get("Cookie"))
+        if expires_at is not None:
+            if expires_at - int(time.time()) < SESSION_RENEWAL_SECONDS:
+                self._renewed_session_cookie = authentication.session_cookie(
+                    self.arachne.config.secure_cookie
+                )
             return
         raise ClientProblem(
             HTTPStatus.UNAUTHORIZED,
@@ -765,6 +946,9 @@ class ArachneHandler(BaseHTTPRequestHandler):
             self._require_authentication()
             self._serve_ruling(path, parsed.query)
             return
+        if path == INBOX_PATH and not parsed.query:
+            self._serve_inbox()
+            return
         self._require_authentication()
         self._serve_page(path)
 
@@ -810,17 +994,23 @@ class ArachneHandler(BaseHTTPRequestHandler):
         return candidate
 
     def _serve_bootstrap(self, raw_query: str) -> None:
-        query = parse_qs(raw_query, keep_blank_values=True)
-        if set(query) != {"next"} or len(query["next"]) != 1:
-            raise ClientProblem(
-                HTTPStatus.BAD_REQUEST,
-                "invalid_bootstrap",
-                "provide exactly one allowlisted 'next' page",
-            )
-        name = query["next"][0].removeprefix("/")
-        self._page_candidate(name)
-        destination = json.dumps(f"/{name}")
-        page = json.dumps(name)
+        if raw_query:
+            query = parse_qs(raw_query, keep_blank_values=True)
+            if set(query) != {"next"} or len(query["next"]) != 1:
+                raise ClientProblem(
+                    HTTPStatus.BAD_REQUEST,
+                    "invalid_bootstrap",
+                    "provide exactly one allowlisted 'next' page, or none for the inbox",
+                )
+            name = query["next"][0].removeprefix("/")
+            self._page_candidate(name)
+            binding = name
+            destination = json.dumps(f"/{name}")
+        else:
+            # No destination page: establish the session and land on the inbox.
+            binding = INBOX_PATH
+            destination = json.dumps(INBOX_PATH)
+        page = json.dumps(binding)
         body = f"""<!doctype html>
 <meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
@@ -874,6 +1064,96 @@ class ArachneHandler(BaseHTTPRequestHandler):
             "text/html; charset=utf-8",
             extra_headers={"Content-Security-Policy": DECISION_PAGE_CSP},
         )
+
+    def _serve_inbox(self) -> None:
+        """Render the stable mailbox: authenticated state only, no secrets.
+
+        An unauthenticated visit (a bookmark whose session lapsed) receives a
+        friendly 401 shell that names no pages, no rulings, and no counts.
+        """
+
+        try:
+            self._require_authentication()
+        except ClientProblem:
+            self._write(
+                HTTPStatus.UNAUTHORIZED,
+                _render_locked_inbox(),
+                "text/html; charset=utf-8",
+                extra_headers={"Content-Security-Policy": INBOX_CSP},
+            )
+            return
+        pending, archived = self._inbox_entries()
+        self._write(
+            HTTPStatus.OK,
+            _render_inbox(pending, archived),
+            "text/html; charset=utf-8",
+            extra_headers={"Content-Security-Policy": INBOX_CSP},
+        )
+
+    def _inbox_entries(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Split allowlisted pages into pending and archived, both derived.
+
+        A page is archived when a ruling carrying its issue token was filed at
+        or after the page's publication time; filing a ruling therefore *is*
+        the archive action, and re-publishing a page for the same issue
+        returns it to pending. No mutable inbox state exists to maintain.
+        """
+
+        _, summaries = self.arachne.store.summaries_after(0)
+        rulings_by_issue: dict[str, list[tuple[float, int]]] = {}
+        for summary in summaries:
+            moment = _parse_submitted_at(summary.get("submitted_at"))
+            if moment is None:
+                continue
+            rulings_by_issue.setdefault(str(summary["issue"]), []).append(
+                (moment, summary["sequence"])
+            )
+        pending: list[dict[str, Any]] = []
+        archived: list[dict[str, Any]] = []
+        pages_dir = self.arachne.config.pages_dir
+        try:
+            names = sorted(entry.name for entry in pages_dir.iterdir())
+        except OSError:
+            names = []
+        for name in names:
+            if PAGE_NAME.fullmatch(name) is None:
+                continue
+            candidate = pages_dir / name
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            # Floor the mtime to whole milliseconds: submitted_at is persisted
+            # at millisecond precision, so comparing against a finer-grained
+            # mtime would let a ruling filed later in the same millisecond
+            # appear to precede its page's publication and never archive it.
+            published_at = int(candidate.stat().st_mtime * 1000) / 1000
+            # The issue recorded at publication is authoritative; filename
+            # inference remains only as a fallback for pre-metadata pages.
+            issue = read_page_issue(pages_dir, name) or _page_issue(name)
+            entry = {
+                "name": name,
+                "issue": issue,
+                "title": _page_title(candidate) or _fallback_title(name, issue),
+                "published_at": published_at,
+            }
+            filed = [
+                (moment, sequence)
+                for moment, sequence in rulings_by_issue.get(issue, [])
+                if moment >= published_at
+            ]
+            if filed:
+                ruled_at, ruling_sequence = max(
+                    filed, key=lambda record: record[1]
+                )
+                entry["ruled_at"] = ruled_at
+                entry["ruling_sequence"] = ruling_sequence
+                archived.append(entry)
+            else:
+                pending.append(entry)
+        pending.sort(key=lambda entry: entry["published_at"], reverse=True)
+        archived.sort(key=lambda entry: entry["ruling_sequence"], reverse=True)
+        return pending, archived
 
     def _post(self) -> None:
         parsed = urlsplit(self.path)
@@ -943,33 +1223,47 @@ class ArachneHandler(BaseHTTPRequestHandler):
         payload = self._read_json_payload(
             "POST /bootstrap-ticket", "bootstrap ticket"
         )
-        if not isinstance(payload, dict) or set(payload) != {"page"}:
+        if not isinstance(payload, dict) or not set(payload) <= {"page"}:
             raise ClientProblem(
                 HTTPStatus.BAD_REQUEST,
                 "invalid_bootstrap_ticket",
-                "the bootstrap ticket request must contain only a page",
+                "the bootstrap ticket request must contain only an optional page",
             )
-        page = payload["page"]
-        if not isinstance(page, str):
+        page = payload.get("page")
+        if page is None:
+            binding = INBOX_PATH
+        elif isinstance(page, str):
+            self._page_candidate(page)
+            binding = page
+        else:
             raise ClientProblem(
                 HTTPStatus.BAD_REQUEST,
                 "invalid_bootstrap_ticket",
-                "'page' must name a published decision page",
+                "'page' must name a published decision page, or be null for the inbox",
             )
-        self._page_candidate(page)
-        ticket, expires_at = self.arachne.authentication.issue_bootstrap_ticket(page)
+        ticket, expires_at = self.arachne.authentication.issue_bootstrap_ticket(
+            binding
+        )
         self._json(
             HTTPStatus.CREATED,
-            {"ticket": ticket, "expires_at": expires_at, "page": page},
+            {
+                "ticket": ticket,
+                "expires_at": expires_at,
+                "page": None if binding == INBOX_PATH else binding,
+            },
         )
 
     def _publish_page(self) -> None:
         payload = self._read_json_payload("POST /pages", "decision page")
-        if not isinstance(payload, dict) or set(payload) != {"name", "html"}:
+        if (
+            not isinstance(payload, dict)
+            or not {"name", "html"} <= set(payload)
+            or not set(payload) <= {"name", "html", "issue"}
+        ):
             raise ClientProblem(
                 HTTPStatus.BAD_REQUEST,
                 "invalid_page",
-                "the publication request must contain only name and html",
+                "the publication request must contain name, html, and optionally issue",
             )
         name = payload["name"]
         html = payload["html"]
@@ -980,7 +1274,9 @@ class ArachneHandler(BaseHTTPRequestHandler):
                 "'name' and 'html' must be strings",
             )
         try:
-            publication = publish_html(name, html, self.arachne.config.pages_dir)
+            publication = publish_html(
+                name, html, self.arachne.config.pages_dir, issue=payload.get("issue")
+            )
         except ValueError as exc:
             raise ClientProblem(
                 HTTPStatus.BAD_REQUEST,
@@ -992,6 +1288,7 @@ class ArachneHandler(BaseHTTPRequestHandler):
             {
                 "ok": True,
                 "page": publication.name,
+                "issue": publication.issue,
                 "rewritten_references": publication.replacements,
             },
         )
@@ -1078,7 +1375,8 @@ class ArachneHandler(BaseHTTPRequestHandler):
             if not isinstance(page, str):
                 accepted = False
             else:
-                self._page_candidate(page)
+                if page != INBOX_PATH:
+                    self._page_candidate(page)
                 accepted = self.arachne.authentication.consume_bootstrap_ticket(
                     payload["ticket"], page
                 )

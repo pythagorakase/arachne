@@ -1,0 +1,54 @@
+# Arachne custom-domain ingress — tailnet-only by construction.
+#
+# Replace every @@...@@ placeholder before installing at /etc/caddy/Caddyfile:
+#   @@TAILNET_IPV4@@       cairn's Tailscale address (`tailscale ip -4`)
+#   @@ARACHNE_CA_FILE@@    a caddy-readable COPY of Arachne's public CA
+#                          certificate, e.g. /etc/caddy/arachne-ca.pem —
+#                          the caddy service user cannot (and must not) read
+#                          the owner-only ~/.local/state/arachne-tls/ dir;
+#                          copy ca-cert.pem (public material only, never keys)
+#                          and re-copy it if the private CA is ever rotated.
+#
+# Invariants this file must preserve (SPEC §6):
+#   - bind ONLY the tailnet address — never 0.0.0.0, never a LAN/public interface
+#   - certificates via DNS-01 (no public HTTP challenge listener)
+#   - verified HTTPS to the loopback backend (private CA), matching Tailscale Serve
+#
+# DNS-01 issuance needs no HTTP listener, so the automatic HTTP→HTTPS
+# redirect server is disabled outright — no port-80 socket exists on any
+# interface, on any Caddy version, regardless of how redirect servers treat
+# bind inheritance. default_bind remains as defense in depth for any server
+# Caddy might otherwise create implicitly.
+
+{
+	default_bind @@TAILNET_IPV4@@
+	auto_https disable_redirects
+}
+
+arachne.pythagora.net {
+	bind @@TAILNET_IPV4@@
+	encode zstd gzip
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+		resolvers 1.1.1.1 1.0.0.1
+	}
+	reverse_proxy https://127.0.0.1:8788 {
+		transport http {
+			tls_trust_pool file @@ARACHNE_CA_FILE@@
+			tls_server_name localhost
+		}
+	}
+}
+
+# Optional: front the MCP adapter on the same name. Uncomment only if remote
+# harnesses should reach MCP via the custom domain; then add
+# `arachne.pythagora.net:8443` to ARACHNE_MCP_ALLOWED_HOSTS.
+#
+# arachne.pythagora.net:8443 {
+# 	bind @@TAILNET_IPV4@@
+# 	tls {
+# 		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+# 		resolvers 1.1.1.1 1.0.0.1
+# 	}
+# 	reverse_proxy http://127.0.0.1:8790
+# }

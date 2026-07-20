@@ -33,7 +33,7 @@ LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 # Kept in step with the [project] version in pyproject.toml; the project is
 # not an installed distribution (tool.uv package = false), so the version
 # cannot be read from importlib metadata.
-ADAPTER_VERSION = "0.1.0"
+ADAPTER_VERSION = "0.2.0"
 
 
 def _required_url(name: str, value: str | None, *, public: bool = False) -> str:
@@ -243,17 +243,22 @@ class ArachneClient:
     async def get_ruling(self, sequence: int) -> dict[str, Any]:
         return await self._json_request("GET", f"/rulings/{sequence}")
 
-    async def publish_decision(self, name: str, html: str) -> dict[str, Any]:
+    async def publish_decision(
+        self, name: str, html: str, issue: str | None
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"name": name, "html": html}
+        if issue is not None:
+            payload["issue"] = issue
         result = await self._json_request(
             "POST",
             "/pages",
-            payload={"name": name, "html": html},
+            payload=payload,
             expected=(201,),
         )
         result["url"] = f"{self.settings.public_url}/{quote(name, safe='')}"
         return result
 
-    async def bootstrap_url(self, page: str) -> dict[str, Any]:
+    async def bootstrap_url(self, page: str | None) -> dict[str, Any]:
         ticket = await self._json_request(
             "POST",
             "/bootstrap-ticket",
@@ -263,11 +268,14 @@ class ArachneClient:
         candidate = ticket.get("ticket")
         if not isinstance(candidate, str) or AUTH_TOKEN.fullmatch(candidate) is None:
             raise UpstreamProblem("Arachne returned an invalid bootstrap ticket")
+        destination = (
+            "" if page is None else f"?next={quote(page, safe='')}"
+        )
         return {
             "page": page,
             "expires_at": ticket.get("expires_at"),
             "url": (
-                f"{self.settings.public_url}/bootstrap?next={quote(page, safe='')}"
+                f"{self.settings.public_url}/bootstrap{destination}"
                 f"#ticket={quote(candidate, safe='')}"
             ),
             "credential": "single-use bootstrap ticket",
@@ -448,14 +456,24 @@ def create_app(settings: Settings) -> Starlette:
         return await client.wait_for_ruling(since, ctx)
 
     @mcp.tool(annotations=annotations_write, structured_output=True)
-    async def publish_decision(name: str, html: str) -> dict[str, Any]:
-        """Validate and atomically publish trusted decision HTML on Arachne."""
+    async def publish_decision(
+        name: str, html: str, issue: str | None = None
+    ) -> dict[str, Any]:
+        """Validate and atomically publish trusted decision HTML on Arachne.
 
-        return await client.publish_decision(name, html)
+        Pass the issue token the page will file so the inbox can pair the
+        ruling with this page regardless of the filename.
+        """
+
+        return await client.publish_decision(name, html, issue)
 
     @mcp.tool(annotations=annotations_write, structured_output=True)
-    async def bootstrap_url(page: str) -> dict[str, Any]:
-        """Create a five-minute, single-use browser bootstrap URL for a page."""
+    async def bootstrap_url(page: str | None = None) -> dict[str, Any]:
+        """Create a five-minute, single-use browser bootstrap URL.
+
+        With a page name the session lands on that page; with no page it
+        lands on the inbox at /, where every brief is reachable.
+        """
 
         return await client.bootstrap_url(page)
 

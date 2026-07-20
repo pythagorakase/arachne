@@ -17,8 +17,8 @@ tools (surfaced as `mcp__plugin_arachne_arachne__<tool>`):
 | `status(since)` | Health + non-destructive backlog summaries after `since`. |
 | `get_ruling(sequence)` | Read one complete persisted ruling; no cursor change. |
 | `wait_for_ruling(since)` | Block until the first ruling after `since`; returns `{cursor, ruling}`. |
-| `publish_decision(name, html)` | Server-side contract validation + atomic publish; returns the page URL. |
-| `bootstrap_url(page)` | Mint a single-use, short-lived browser URL for the human. |
+| `publish_decision(name, html, issue?)` | Server-side contract validation + atomic publish; returns the page URL. Pass the issue the page files. |
+| `bootstrap_url(page?)` | Mint a single-use, short-lived browser URL; omit `page` to land on the inbox at `/`. |
 
 ## When to Use It (and When Not)
 
@@ -50,15 +50,23 @@ losing one is not. Never hand-edit it otherwise.
    or token trouble — do not improvise fallbacks.
 1. **Author** a self-contained `decision_<slug>.html` per the page contract
    below.
-2. **Publish** with `publish_decision(name, html)`. Validation is
-   server-side (relative `/ruling` endpoint, `localStorage` persistence,
-   name allowlist `[A-Za-z0-9][A-Za-z0-9._-]*\.html`); it rewrites absolute
-   loopback endpoints and publishes atomically. Returns the public page URL.
-3. **Hand over the link** — `bootstrap_url(page)` returns a **single-use**
-   URL that expires in minutes (`expires_at` is in the result). Mint it when
-   the human is ready to tap, send it to them, and mint a fresh one if it
-   lapses. Opening it sets their session cookie and lands on the page; the
-   ticket rides in the URL fragment and never appears in logs.
+2. **Publish** with `publish_decision(name, html, issue)`, where `issue` is
+   the same token the page's `/ruling` POST will carry — recording it is what
+   lets the inbox archive the brief the moment its ruling is filed.
+   Validation is server-side (relative `/ruling` endpoint, `localStorage`
+   persistence, name allowlist `[A-Za-z0-9][A-Za-z0-9._-]*\.html`); it
+   rewrites absolute loopback endpoints and publishes atomically. Returns the
+   public page URL.
+3. **Point at the inbox** — the human's devices hold a fifteen-day sliding
+   session and a bookmark to the stable inbox at `/`, where the new brief is
+   already listed. Default to saying the brief is **in their Arachne inbox**
+   (name it; optionally include the plain inbox URL — it carries no secret).
+   Only mint `bootstrap_url()` when a device needs enrollment — it is new, or
+   its session lapsed (~15 idle days) and the inbox shows the locked shell.
+   The result is a **single-use** URL that expires in minutes (`expires_at`
+   is in the result): no-arg lands on the inbox; `bootstrap_url(page)`
+   deep-links one brief. The ticket rides in the URL fragment and never
+   appears in logs.
 4. **Arm the wake** — call `wait_for_ruling(since=<cursor>)` and then end
    your turn (or continue other work). This is a long MCP call: the harness
    auto-backgrounds it into a task after a couple of minutes, the server's

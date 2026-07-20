@@ -13,8 +13,8 @@ packages registration, connect-time authentication, and the client skill (see
 | `status(since=0)` | Read core health and non-destructive ruling summaries. |
 | `get_ruling(sequence)` | Read one complete persisted ruling. |
 | `wait_for_ruling(since)` | Wait for the first ruling after an explicit cursor. |
-| `publish_decision(name, html)` | Validate and atomically publish trusted HTML. |
-| `bootstrap_url(page)` | Mint a five-minute, single-use browser URL. |
+| `publish_decision(name, html, issue=None)` | Validate and atomically publish trusted HTML; record the issue token the page files so the inbox can pair its ruling. |
+| `bootstrap_url(page=None)` | Mint a five-minute, single-use browser URL; omit `page` to land on the inbox at `/`. |
 
 `wait_for_ruling` never owns hidden cursor state. Callers pass the last
 observed sequence in `since`, receive the advancing sequence in `cursor`, and

@@ -13,14 +13,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from page_contract import publish_file  # noqa: E402
 
 
-def publish(source: Path, pages_dir: Path) -> Path:
-    publication = publish_file(source, pages_dir)
+def publish(source: Path, pages_dir: Path, issue: str | None) -> Path:
+    publication = publish_file(source, pages_dir, issue=issue)
     action = (
         "rewrote loopback references and published"
         if publication.replacements
         else "published"
     )
-    print(f"{action}: {source} -> {publication.destination}")
+    recorded = f" (issue {publication.issue})" if publication.issue else ""
+    print(f"{action}: {source} -> {publication.destination}{recorded}")
     return publication.destination
 
 
@@ -37,10 +38,21 @@ def main() -> int:
         ),
         help="publish directory (default: ARACHNE_PAGES_DIR or repo/pages)",
     )
+    parser.add_argument(
+        "--issue",
+        default=None,
+        help="issue token the page files; recorded so the inbox can pair the ruling",
+    )
     arguments = parser.parse_args()
+    if arguments.issue is not None and len(arguments.source) > 1:
+        parser.error("--issue applies to exactly one source page")
     try:
         for source in arguments.source:
-            publish(source.resolve(), arguments.pages_dir.expanduser().resolve())
+            publish(
+                source.resolve(),
+                arguments.pages_dir.expanduser().resolve(),
+                arguments.issue,
+            )
     except (OSError, ValueError) as exc:
         parser.exit(1, f"Arachne publish failed: {exc}\n")
     return 0
