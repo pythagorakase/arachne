@@ -19,10 +19,9 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from mcp_server import ADAPTER_VERSION, _read_owner_token
-from page_contract import read_page_axes
+from page_contract import read_page_issue
 from tests.test_e2e import (
     RunningArachne,
-    axis_manifest,
     bearer,
     free_port,
     post_ruling,
@@ -200,14 +199,12 @@ class ArachneMCPTests(unittest.IsolatedAsyncioTestCase):
 
             html = """<!doctype html><title>MCP decision</title>
             <main><h1>Choose</h1><p>Argument only.</p></main>"""
-            axes = axis_manifest("mcp-476")
             published = self.structured(
                 await session.call_tool(
                     "publish_decision",
                     arguments={
                         "name": "decision_mcp.html",
                         "html": html,
-                        "axes": axes,
                         "issue": "mcp-476",
                     },
                 )
@@ -223,8 +220,8 @@ class ArachneMCPTests(unittest.IsolatedAsyncioTestCase):
                 html,
             )
             self.assertEqual(
-                read_page_axes(self.pages, "decision_mcp.html"),
-                axes,
+                read_page_issue(self.pages, "decision_mcp.html"),
+                "mcp-476",
             )
 
             bootstrap = self.structured(

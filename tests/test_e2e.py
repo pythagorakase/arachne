@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import concurrent.futures
 import hashlib
 import hmac
@@ -20,29 +19,6 @@ from urllib.request import Request, urlopen
 
 
 REPO = Path(__file__).resolve().parents[1]
-
-
-def axis_manifest(issue: str = "476") -> dict:
-    return {
-        "contract": "v2",
-        "issue": issue,
-        "title": f"Decision {issue}",
-        "repo": "Arachne tests",
-        "overall_notes": False,
-        "axes": [
-            {
-                "id": "path",
-                "label": "Path",
-                "select": "one",
-                "notes": True,
-                "options": [
-                    {"id": "woven", "label": "Woven"},
-                    {"id": "direct", "label": "Direct"},
-                ],
-            }
-        ],
-    }
-
 
 def free_port() -> int:
     with socket.socket() as candidate:
@@ -338,12 +314,11 @@ class ArachneEndToEndTests(unittest.TestCase):
     def test_bearer_publication_and_one_time_bootstrap_ticket(self) -> None:
         source = """<!doctype html><title>Argument only</title>
         <main><h1>Choose a path</h1><p>Compare the two approaches.</p></main>"""
-        axes = axis_manifest("mcp-476")
         status, published = post_json(
             self.service.url,
             "/pages",
             self.service.token,
-            {"name": "decision_mcp.html", "html": source, "axes": axes},
+            {"name": "decision_mcp.html", "html": source, "issue": "mcp-476"},
         )
         self.assertEqual(status, 201)
         self.assertIs(published["ok"], True)
@@ -399,35 +374,28 @@ class ArachneEndToEndTests(unittest.TestCase):
                 {
                     "name": "decision_invalid.html",
                     "html": "<script>localStorage.clear()</script>",
-                    "axes": axis_manifest("invalid"),
+                    "issue": "invalid",
                 },
             )
         self.assertEqual(invalid_page.exception.code, 400)
         self.assertFalse((self.pages / "decision_invalid.html").exists())
 
-    def test_axes_endpoint_uses_the_page_session_gate_and_returns_manifest(self) -> None:
-        name = "decision_axes.html"
-        manifest = axis_manifest("axes-issue")
+    def test_manifest_endpoint_is_gone_and_page_csp_is_unchanged(self) -> None:
+        name = "decision_parts.html"
         post_json(
             self.service.url,
             "/pages",
             self.service.token,
             {
                 "name": name,
-                "html": "<!doctype html><main>Argument only</main>",
-                "axes": manifest,
+                "html": "<!doctype html><title>Parts decision</title><main>Argument only</main>",
+                "issue": "parts-issue",
             },
         )
 
-        with self.assertRaises(HTTPError) as unauthenticated:
-            get_json(f"{self.service.url}/axes/{name}")
-        self.assertEqual(unauthenticated.exception.code, 401)
-
-        status, returned = get_json(
-            f"{self.service.url}/axes/{name}", token=self.service.token
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(returned, manifest)
+        with self.assertRaises(HTTPError) as absent:
+            get_json(f"{self.service.url}/axes/{name}", token=self.service.token)
+        self.assertEqual(absent.exception.code, 404)
 
         with urlopen(
             Request(
@@ -444,26 +412,21 @@ class ArachneEndToEndTests(unittest.TestCase):
 
         status, inbox, _ = self._get_inbox(bearer(self.service.token))
         self.assertEqual(status, 200)
-        self.assertIn('data-axis-count="1"', inbox)
-        self.assertIn("Arachne tests", inbox)
-        self.assertIn("/axes/", inbox)
+        self.assertIn('data-part-count="0"', inbox)
+        self.assertIn("Parts decision", inbox)
+        self.assertIn('class="ruling-nav"', inbox)
+        self.assertNotIn("/axes/", inbox)
 
         cookie = craft_session_cookie(self.service.token, int(time.time()) + 3600)
-        with urlopen(
-            Request(
-                f"{self.service.url}/axes/{name}",
-                headers={"Cookie": cookie},
-            ),
-            timeout=1,
-        ) as response:
-            self.assertEqual(json.load(response), manifest)
-
-        with self.assertRaises(HTTPError) as absent:
-            get_json(
-                f"{self.service.url}/axes/decision_476.html",
-                token=self.service.token,
+        with self.assertRaises(HTTPError) as cookie_absent:
+            urlopen(
+                Request(
+                    f"{self.service.url}/axes/{name}",
+                    headers={"Cookie": cookie},
+                ),
+                timeout=1,
             )
-        self.assertEqual(absent.exception.code, 404)
+        self.assertEqual(cookie_absent.exception.code, 404)
 
     def _get_inbox(self, headers: dict[str, str]) -> tuple[int, str, dict]:
         request = Request(f"{self.service.url}/", headers=headers)
@@ -492,7 +455,8 @@ class ArachneEndToEndTests(unittest.TestCase):
         self.assertIn('data-list-count="archive">0</span>', body)
         self.assertIn('class="app-frame" data-arachne-shell', body)
         self.assertIn('class="brief-frame"', body)
-        self.assertIn("data-axis-list", body)
+        self.assertIn('<nav class="ruling-nav"', body)
+        self.assertIn("data-part-outline", body)
         self.assertNotIn("@@ARACHNE_", body)
 
         post_ruling(self.service.url, self.service.token, "476")
@@ -673,7 +637,6 @@ class ArachneEndToEndTests(unittest.TestCase):
         # whose filed issue shares nothing with the filename must still
         # archive when its ruling lands.
         source = "<!doctype html><title>Drift</title><main>Compare paths</main>"
-        manifest = axis_manifest("476")
         status, published = post_json(
             self.service.url,
             "/pages",
@@ -681,7 +644,7 @@ class ArachneEndToEndTests(unittest.TestCase):
             {
                 "name": "decision_relationship_drift.html",
                 "html": source,
-                "axes": manifest,
+                "issue": "476",
             },
         )
         self.assertEqual(status, 201)
@@ -694,10 +657,9 @@ class ArachneEndToEndTests(unittest.TestCase):
             body.index("decision_relationship_drift.html"),
         )
 
-        # Republishing with a new manifest replaces the old issue metadata;
-        # filename inference is irrelevant for every v2 publication.
+        # Republishing with a new explicit token replaces the old issue metadata;
+        # filename inference is irrelevant when the publisher supplies an issue.
         time.sleep(0.05)
-        replacement_manifest = axis_manifest("relationship")
         status, republished = post_json(
             self.service.url,
             "/pages",
@@ -705,7 +667,7 @@ class ArachneEndToEndTests(unittest.TestCase):
             {
                 "name": "decision_relationship_drift.html",
                 "html": source,
-                "axes": replacement_manifest,
+                "issue": "relationship",
             },
         )
         self.assertEqual(status, 201)
@@ -717,8 +679,8 @@ class ArachneEndToEndTests(unittest.TestCase):
             body.index('data-list-panel="archive"'),
         )
 
-        # Sidecar metadata is never servable, and an explicit issue must agree
-        # with the manifest's authoritative token.
+        # Sidecar metadata is never servable, and invalid explicit issues fail
+        # before either publication file can be committed.
         with self.assertRaises(HTTPError) as unservable:
             urlopen(
                 Request(
@@ -736,15 +698,14 @@ class ArachneEndToEndTests(unittest.TestCase):
                 {
                     "name": "decision_x.html",
                     "html": source,
-                    "axes": axis_manifest("476"),
-                    "issue": "477",
+                    "issue": {"not": "a token"},
                 },
             )
         self.assertEqual(invalid.exception.code, 400)
         problem = json.load(invalid.exception)
-        self.assertIn("disagrees", problem["detail"])
+        self.assertIn("string or integer", problem["detail"])
 
-    def test_v2_publication_rejects_capture_code_and_malformed_manifests(self) -> None:
+    def test_v2_publication_rejects_capture_code_and_removed_manifest_field(self) -> None:
         forbidden_pages = {
             "relative ruling": "<script>fetch('/ruling')</script>",
             "local storage": "<script>localStorage.clear()</script>",
@@ -764,7 +725,7 @@ class ArachneEndToEndTests(unittest.TestCase):
                     {
                         "name": "decision_forbidden.html",
                         "html": html,
-                        "axes": axis_manifest("forbidden"),
+                        "issue": "forbidden",
                     },
                 )
             self.assertEqual(rejected.exception.code, 400)
@@ -773,56 +734,23 @@ class ArachneEndToEndTests(unittest.TestCase):
             self.assertTrue(problem["detail"])
             self.assertFalse((self.pages / "decision_forbidden.html").exists())
 
-        bad_contract = axis_manifest("bad-contract")
-        bad_contract["contract"] = "v1"
-        empty_axes = axis_manifest("empty-axes")
-        empty_axes["axes"] = []
-        duplicate_axis = axis_manifest("duplicate-axis")
-        duplicate_axis["axes"].append(copy.deepcopy(duplicate_axis["axes"][0]))
-        unsupported_select = axis_manifest("many")
-        unsupported_select["axes"][0]["select"] = "many"
-        empty_option_id = axis_manifest("empty-option")
-        empty_option_id["axes"][0]["options"][0]["id"] = ""
-        colliding_form_keys = axis_manifest("collide")
-        colliding_form_keys["axes"][0]["id"] = "scope"
-        colliding_form_keys["axes"][0]["notes"] = False
-        colliding_form_keys["axes"].append(
-            {
-                "id": "scope-notes",
-                "label": "Scope Notes",
-                "select": "one",
-                "notes": False,
-                "options": [{"id": "only", "label": "Only"}],
-            }
-        )
-
-        malformed = {
-            "bad contract": (bad_contract, "contract"),
-            "empty axes": (empty_axes, "non-empty array"),
-            "duplicate axis": (duplicate_axis, "duplicate axis id"),
-            "unsupported select": (unsupported_select, "select"),
-            "empty option id": (empty_option_id, "non-empty string"),
-            "colliding form keys": (colliding_form_keys, "colliding form key"),
-        }
-        for label, (manifest, diagnostic) in malformed.items():
-            with self.subTest(manifest=label), self.assertRaises(
-                HTTPError
-            ) as rejected:
-                post_json(
-                    self.service.url,
-                    "/pages",
-                    self.service.token,
-                    {
-                        "name": "decision_malformed.html",
-                        "html": "<!doctype html><main>Argument only</main>",
-                        "axes": manifest,
-                    },
-                )
-            self.assertEqual(rejected.exception.code, 400)
-            problem = json.load(rejected.exception)
-            self.assertEqual(problem["error"], "invalid_page")
-            self.assertIn(diagnostic, problem["detail"])
-            self.assertFalse((self.pages / "decision_malformed.html").exists())
+        with self.assertRaises(HTTPError) as rejected:
+            post_json(
+                self.service.url,
+                "/pages",
+                self.service.token,
+                {
+                    "name": "decision_removed.html",
+                    "html": "<!doctype html><main>Argument only</main>",
+                    "issue": "removed",
+                    "axes": {"contract": "v2"},
+                },
+            )
+        self.assertEqual(rejected.exception.code, 400)
+        problem = json.load(rejected.exception)
+        self.assertEqual(problem["error"], "invalid_page")
+        self.assertIn("name and html", problem["detail"])
+        self.assertFalse((self.pages / "decision_removed.html").exists())
 
     def test_bootstrap_url_helper_inbox_variant(self) -> None:
         result = subprocess.run(
@@ -1076,21 +1004,18 @@ class ArachneEndToEndTests(unittest.TestCase):
         self.assertEqual(problem["error"], "invalid_ruling")
         self.assertTrue(problem["detail"])
 
-    def test_publisher_enforces_v2_argument_only_contract(self) -> None:
+    def test_publisher_enforces_v2_nav_contract(self) -> None:
         source = Path(self.temporary.name) / "decision_publish.html"
-        axes_path = Path(self.temporary.name) / "decision_publish.axes.json"
         destination_dir = Path(self.temporary.name) / "published"
         source.write_text(
-            "<!doctype html><main><h1>Argument</h1><p>Compare paths.</p></main>",
+            '<!doctype html><html data-issue="publish"><main>'
+            "<h1>Argument</h1><p>Compare paths.</p></main></html>",
             encoding="utf-8",
         )
-        axes_path.write_text(json.dumps(axis_manifest("publish")), encoding="utf-8")
         result = subprocess.run(
             [
                 sys.executable,
                 str(REPO / "bin" / "publish-page.py"),
-                "--axes",
-                str(axes_path),
                 "--pages-dir",
                 str(destination_dir),
                 str(source),
@@ -1103,19 +1028,24 @@ class ArachneEndToEndTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         published = (destination_dir / source.name).read_text()
         self.assertEqual(published, source.read_text(encoding="utf-8"))
+        sidecar = json.loads(
+            (destination_dir / ".meta" / f"{source.name}.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(sidecar, {"issue": "publish"})
 
         legacy = Path(self.temporary.name) / "decision_legacy.html"
         legacy.write_text(
-            "<script>fetch('http://127.0.0.1:8788/ruling'); "
-            "localStorage.setItem('draft', 'yes')</script>",
+            '<html data-issue="legacy"><script>'
+            "fetch('http://127.0.0.1:8788/ruling'); "
+            "localStorage.setItem('draft', 'yes')</script></html>",
             encoding="utf-8",
         )
         rejected = subprocess.run(
             [
                 sys.executable,
                 str(REPO / "bin" / "publish-page.py"),
-                "--axes",
-                str(axes_path),
                 "--pages-dir",
                 str(destination_dir),
                 str(legacy),
@@ -1128,6 +1058,117 @@ class ArachneEndToEndTests(unittest.TestCase):
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("forbidden /ruling", rejected.stderr)
         self.assertFalse((destination_dir / legacy.name).exists())
+
+    def test_publisher_handles_multiple_brief_owned_issues(self) -> None:
+        destination_dir = Path(self.temporary.name) / "published-many"
+        first = Path(self.temporary.name) / "decision_alpha.html"
+        second = Path(self.temporary.name) / "decision_beta.html"
+        first.write_text(
+            '<!doctype html><html data-issue="alpha"><main>Alpha</main></html>',
+            encoding="utf-8",
+        )
+        second.write_text(
+            '<!doctype html><body data-issue="beta"><main>Beta</main></body>',
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO / "bin" / "publish-page.py"),
+                str(first),
+                str(second),
+                "--pages-dir",
+                str(destination_dir),
+            ],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count("published:"), 2)
+        for source, issue in ((first, "alpha"), (second, "beta")):
+            self.assertEqual(
+                (destination_dir / source.name).read_text(encoding="utf-8"),
+                source.read_text(encoding="utf-8"),
+            )
+            sidecar = json.loads(
+                (
+                    destination_dir / ".meta" / f"{source.name}.json"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(sidecar, {"issue": issue})
+
+        rejected = subprocess.run(
+            [
+                sys.executable,
+                str(REPO / "bin" / "publish-page.py"),
+                str(first),
+                str(second),
+                "--pages-dir",
+                str(destination_dir),
+                "--issue",
+                "override",
+            ],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        self.assertEqual(rejected.returncode, 2)
+        self.assertIn("--issue is valid only with a single source", rejected.stderr)
+
+        missing = Path(self.temporary.name) / "decision_missing.html"
+        missing.write_text(
+            "<!doctype html><html><main>No issue</main></html>",
+            encoding="utf-8",
+        )
+        rejected = subprocess.run(
+            [
+                sys.executable,
+                str(REPO / "bin" / "publish-page.py"),
+                str(missing),
+                "--pages-dir",
+                str(destination_dir),
+            ],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("no data-issue", rejected.stderr)
+        self.assertFalse((destination_dir / missing.name).exists())
+
+        override = Path(self.temporary.name) / "decision_override.html"
+        override.write_text(
+            "<!doctype html><html><main>Explicit issue</main></html>",
+            encoding="utf-8",
+        )
+        accepted = subprocess.run(
+            [
+                sys.executable,
+                str(REPO / "bin" / "publish-page.py"),
+                str(override),
+                "--pages-dir",
+                str(destination_dir),
+                "--issue",
+                "explicit",
+            ],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(
+            json.loads(
+                (
+                    destination_dir / ".meta" / f"{override.name}.json"
+                ).read_text(encoding="utf-8")
+            ),
+            {"issue": "explicit"},
+        )
 
     def test_bootstrap_url_helper_uses_fragment_for_the_secret(self) -> None:
         result = subprocess.run(

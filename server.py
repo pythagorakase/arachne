@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from page_contract import PAGE_NAME, publish_html, read_page_axes, read_page_issue
+from page_contract import PAGE_NAME, publish_html, read_page_issue
 from ui import (
     BOOTSTRAP_CSP,
     INBOX_CSP,
@@ -829,9 +829,6 @@ class ArachneHandler(BaseHTTPRequestHandler):
         if path.startswith("/ui/fonts/"):
             self._serve_font(path, parsed.query)
             return
-        if path.startswith("/axes/"):
-            self._serve_axes(path, parsed.query)
-            return
         self._serve_page(path)
 
     def _serve_ruling(self, path: str, raw_query: str) -> None:
@@ -933,26 +930,6 @@ class ArachneHandler(BaseHTTPRequestHandler):
             )
         self._write(HTTPStatus.OK, body, "font/ttf")
 
-    def _serve_axes(self, path: str, raw_query: str) -> None:
-        """Return one published page's v2 axis manifest."""
-
-        name = path.removeprefix("/axes/")
-        if raw_query:
-            raise ClientProblem(
-                HTTPStatus.NOT_FOUND,
-                "not_found",
-                "no such published axis manifest",
-            )
-        self._page_candidate(name)
-        axes = read_page_axes(self.arachne.config.pages_dir, name)
-        if axes is None:
-            raise ClientProblem(
-                HTTPStatus.NOT_FOUND,
-                "not_found",
-                "no axis manifest is recorded for that decision page",
-            )
-        self._json(HTTPStatus.OK, axes)
-
     def _serve_inbox(self) -> None:
         """Render the stable mailbox: authenticated state only, no secrets.
 
@@ -1019,28 +996,10 @@ class ArachneHandler(BaseHTTPRequestHandler):
             # The issue recorded at publication is authoritative; filename
             # inference remains only as a fallback for pre-metadata pages.
             issue = read_page_issue(pages_dir, name) or _page_issue(name)
-            manifest = read_page_axes(pages_dir, name)
-            manifest_title = (
-                manifest.get("title") if isinstance(manifest, dict) else None
-            )
-            manifest_repo = (
-                manifest.get("repo") if isinstance(manifest, dict) else None
-            )
-            manifest_axes = (
-                manifest.get("axes") if isinstance(manifest, dict) else None
-            )
             entry = {
                 "name": name,
                 "issue": issue,
-                "title": (
-                    manifest_title
-                    if isinstance(manifest_title, str) and manifest_title
-                    else page_title(candidate) or fallback_title(name, issue)
-                ),
-                "repo": manifest_repo if isinstance(manifest_repo, str) else "",
-                "axis_count": (
-                    len(manifest_axes) if isinstance(manifest_axes, list) else 0
-                ),
+                "title": page_title(candidate) or fallback_title(name, issue),
                 "published_at": published_at,
             }
             filed = [
@@ -1163,14 +1122,14 @@ class ArachneHandler(BaseHTTPRequestHandler):
         payload = self._read_json_payload("POST /pages", "decision page")
         if (
             not isinstance(payload, dict)
-            or not {"name", "html", "axes"} <= set(payload)
-            or not set(payload) <= {"name", "html", "axes", "issue"}
+            or not {"name", "html"} <= set(payload)
+            or not set(payload) <= {"name", "html", "issue"}
         ):
             raise ClientProblem(
                 HTTPStatus.BAD_REQUEST,
                 "invalid_page",
                 (
-                    "the publication request must contain name, html, and axes, "
+                    "the publication request must contain name and html, "
                     "and may optionally contain issue"
                 ),
             )
@@ -1187,7 +1146,6 @@ class ArachneHandler(BaseHTTPRequestHandler):
                 name,
                 html,
                 self.arachne.config.pages_dir,
-                payload["axes"],
                 issue=payload.get("issue"),
             )
         except ValueError as exc:

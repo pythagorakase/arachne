@@ -247,10 +247,9 @@ class ArachneClient:
         self,
         name: str,
         html: str,
-        axes: dict[str, Any],
         issue: str | None = None,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"name": name, "html": html, "axes": axes}
+        payload: dict[str, Any] = {"name": name, "html": html}
         if issue is not None:
             payload["issue"] = issue
         result = await self._json_request(
@@ -463,16 +462,15 @@ def create_app(settings: Settings) -> Starlette:
     async def publish_decision(
         name: str,
         html: str,
-        axes: dict[str, Any],
         issue: str | None = None,
     ) -> dict[str, Any]:
         """Validate and atomically publish trusted decision HTML on Arachne.
 
-        The required v2 axis manifest supplies the issue token. If issue is
-        also passed, it must agree with the manifest.
+        Pass the issue token the brief reports, or omit it to infer the token
+        from a conventional ``decision_<issue>_*.html`` name.
         """
 
-        return await client.publish_decision(name, html, axes, issue)
+        return await client.publish_decision(name, html, issue)
 
     @mcp.tool(annotations=annotations_write, structured_output=True)
     async def bootstrap_url(page: str | None = None) -> dict[str, Any]:

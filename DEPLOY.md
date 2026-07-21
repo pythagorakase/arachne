@@ -103,8 +103,9 @@ core's latest sequence. The sidecar has no durable state of its own.
 ssh seedbox 'mkdir -p ~/arachne/pages ~/.local/state/arachne \
   ~/.local/state/arachne-runtime ~/bin'
 rsync -az server.py ui bin keepalive.sh seedbox:arachne/
-# Enforce the relative endpoint + localStorage contract before upload:
-bin/publish-page.py /Users/pythagor/nexus/temp/decision_*.html
+# Enforce the v2 nav contract and publish every matched brief using its own
+# <html>/<body> data-issue before upload:
+bin/publish-page.py /Users/pythagor/nexus/temp/decision_*.html --pages-dir pages
 rsync -az pages/ seedbox:arachne/pages/
 ```
 

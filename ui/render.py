@@ -13,7 +13,7 @@ from typing import Any
 
 
 # The inbox is server-rendered, then its application-owned inline script drives
-# same-origin manifest fetches, iframe selection, draft capture, and filing.
+# iframe selection, brief-mediated capture, draft persistence, and filing.
 INBOX_CSP = (
     "default-src 'none'; "
     "script-src 'unsafe-inline'; "
@@ -115,13 +115,6 @@ def _format_moment(epoch: float) -> str:
 
 
 def _render_brief(entry: Mapping[str, Any], *, ruled: bool) -> str:
-    repo = entry.get("repo")
-    repo_text = repo if isinstance(repo, str) else ""
-    axis_count = entry.get("axis_count", 0)
-    if isinstance(axis_count, bool) or not isinstance(axis_count, int):
-        raise ValueError("inbox entry 'axis_count' must be an integer")
-    if axis_count < 0:
-        raise ValueError("inbox entry 'axis_count' must not be negative")
     if ruled:
         timestamp = f"ruled {_format_moment(entry['ruled_at'])}"
         status = "archived"
@@ -135,11 +128,6 @@ def _render_brief(entry: Mapping[str, Any], *, ruled: bool) -> str:
         status = "awaiting"
         ruling_sequence = ""
         ruling_suffix = ""
-    repo_pill = (
-        f'<span class="repo-pill">{html.escape(repo_text)}</span>'
-        if repo_text
-        else ""
-    )
     return _fill_template(
         "brief.html",
         _BRIEF_TEMPLATE,
@@ -151,16 +139,12 @@ def _render_brief(entry: Mapping[str, Any], *, ruled: bool) -> str:
             "@@ARACHNE_BRIEF_TITLE_ATTR@@": html.escape(
                 entry["title"], quote=True
             ),
-            "@@ARACHNE_BRIEF_REPO_ATTR@@": html.escape(repo_text, quote=True),
             "@@ARACHNE_BRIEF_STATUS@@": status,
-            "@@ARACHNE_BRIEF_AXIS_COUNT_ATTR@@": str(axis_count),
-            "@@ARACHNE_BRIEF_AXIS_COUNT@@": str(axis_count),
             "@@ARACHNE_BRIEF_RULING_SEQUENCE@@": html.escape(
                 ruling_sequence, quote=True
             ),
             "@@ARACHNE_BRIEF_ISSUE@@": html.escape(entry["issue"]),
             "@@ARACHNE_BRIEF_TITLE@@": html.escape(entry["title"]),
-            "@@ARACHNE_BRIEF_REPO_PILL@@": repo_pill,
             "@@ARACHNE_BRIEF_TIMESTAMP@@": html.escape(timestamp),
             "@@ARACHNE_BRIEF_RULING_SUFFIX@@": ruling_suffix,
         },
