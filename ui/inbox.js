@@ -4,6 +4,9 @@
   const DEFERRED_SENTINEL = "deferred";
   const DISCUSS_SENTINEL = "discuss";
   const DRAFT_PREFIX = "arachne:docket:v2:";
+  const BRIEF_MESSAGE_SOURCE = "arachne-brief";
+  const CHROME_MESSAGE_SOURCE = "arachne-chrome";
+  const PENDING_SCROLL_TIMEOUT_MS = 700;
   const LIST_MIN = 240;
   const LIST_MAX = 440;
   const DOCKET_MIN = 260;
@@ -152,10 +155,39 @@
       : "ambiguous";
   }
 
+  function isValidBriefInViewMessage(data, knownAxisIds) {
+    if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+    const keys = Object.keys(data).sort();
+    if (
+      keys.length !== 3 ||
+      keys[0] !== "axis" ||
+      keys[1] !== "source" ||
+      keys[2] !== "type"
+    ) {
+      return false;
+    }
+    if (
+      data.source !== BRIEF_MESSAGE_SOURCE ||
+      data.type !== "in-view" ||
+      typeof data.axis !== "string"
+    ) {
+      return false;
+    }
+    if (Array.isArray(knownAxisIds)) return knownAxisIds.includes(data.axis);
+    if (knownAxisIds instanceof Set) return knownAxisIds.has(data.axis);
+    return false;
+  }
+
+  function shouldAcceptInViewReport(pendingScrollAxis, reportedAxis) {
+    return pendingScrollAxis === null || pendingScrollAxis === reportedAxis;
+  }
+
   if (typeof module !== "undefined" && module.exports) {
     module.exports = Object.freeze({
       composeRulingPayload,
+      isValidBriefInViewMessage,
       readRulingAcknowledgement,
+      shouldAcceptInViewReport,
       submissionFailureKind,
     });
   }
@@ -189,6 +221,8 @@
   const docketPane = required("[data-docket]");
   const frame = required("[data-reading-frame]");
   const readingEmpty = required("[data-reading-empty]");
+  const phoneInboxButton = required("[data-phone-inbox]");
+  const phoneReadingContext = required("[data-phone-reading-context]");
   const breadcrumb = required("[data-reading-breadcrumb]");
   const readingStatus = required("[data-reading-status]");
   const previousButton = required("[data-brief-previous]");
@@ -202,6 +236,20 @@
   const overallTextarea = required("[data-overall-textarea]");
   const sendButton = required("[data-send-ruling]");
   const draftNote = required("[data-draft-note]");
+  const ribbon = required("[data-ruling-ribbon]");
+  const ribbonMessage = required("[data-ribbon-message]");
+  const ribbonBody = required("[data-ribbon-body]");
+  const ribbonStepper = required("[data-ribbon-axis-stepper]");
+  const ribbonAxisLabel = required("[data-ribbon-axis-label]");
+  const ribbonAxisControls = required("[data-ribbon-axis-controls]");
+  const ribbonNoteToggle = required("[data-ribbon-note-toggle]");
+  const ribbonNotePanel = required("[data-ribbon-note-panel]");
+  const ribbonNoteTextarea = required("[data-ribbon-note]");
+  const ribbonNoteRequirement = required(
+    "[data-ribbon-note-requirement]",
+  );
+  const ribbonProgress = required("[data-ribbon-progress]");
+  const ribbonSendButton = required("[data-ribbon-send]");
 
   const state = {
     card: null,
@@ -209,9 +257,15 @@
     draft: null,
     activeAxisId: null,
     loadSequence: 0,
+    frameLoadedSequence: 0,
+    frameLoadHandler: null,
     submitting: false,
     filed: false,
     storageWarning: "",
+    ribbonNoteOpen: false,
+    pendingScrollAxis: null,
+    pendingScrollStartedAt: 0,
+    pendingScrollTimer: null,
   };
 
   function allCards() {
@@ -240,25 +294,82 @@
     message.textContent = text;
     message.className = "docket-message";
     if (kind) message.classList.add(`is-${kind}`);
+    ribbonMessage.textContent = text;
+    ribbonMessage.className = "ribbon-message";
+    if (kind) ribbonMessage.classList.add(`is-${kind}`);
+  }
+
+  function clearPendingScroll() {
+    if (state.pendingScrollTimer !== null) {
+      window.clearTimeout(state.pendingScrollTimer);
+    }
+    state.pendingScrollAxis = null;
+    state.pendingScrollStartedAt = 0;
+    state.pendingScrollTimer = null;
+  }
+
+  function beginPendingScroll(axisId) {
+    clearPendingScroll();
+    const startedAt = Date.now();
+    state.pendingScrollAxis = axisId;
+    state.pendingScrollStartedAt = startedAt;
+    state.pendingScrollTimer = window.setTimeout(() => {
+      if (
+        state.pendingScrollAxis === axisId &&
+        state.pendingScrollStartedAt === startedAt
+      ) {
+        state.pendingScrollAxis = null;
+        state.pendingScrollStartedAt = 0;
+        state.pendingScrollTimer = null;
+      }
+    }, PENDING_SCROLL_TIMEOUT_MS);
+  }
+
+  function resetRibbon() {
+    ribbonBody.hidden = true;
+    ribbon.removeAttribute("aria-busy");
+    ribbonStepper.replaceChildren();
+    ribbonAxisLabel.textContent = "";
+    ribbonAxisControls.replaceChildren();
+    ribbonNoteToggle.hidden = true;
+    ribbonNoteToggle.disabled = true;
+    ribbonNoteToggle.setAttribute("aria-expanded", "false");
+    ribbonNotePanel.hidden = true;
+    ribbonNoteTextarea.value = "";
+    ribbonNoteTextarea.required = false;
+    ribbonNoteTextarea.setAttribute("aria-invalid", "false");
+    ribbonNoteRequirement.hidden = true;
+    ribbonProgress.textContent = "0 of 0 ruled";
+    ribbonSendButton.disabled = true;
+    ribbonSendButton.classList.remove("is-filed");
+    ribbonSendButton.textContent = "SEND RULING";
+    ribbonSendButton.title = "Select a brief to begin a ruling";
   }
 
   function resetDocket(text) {
+    clearPendingScroll();
     state.manifest = null;
     state.draft = null;
     state.activeAxisId = null;
     state.submitting = false;
     state.filed = false;
     state.storageWarning = "";
+    state.ribbonNoteOpen = false;
     axisList.replaceChildren();
     meterFill.style.width = "0%";
     meterLabel.textContent = "0 of 0 ruled";
     overallField.hidden = true;
     overallTextarea.value = "";
+    overallTextarea.disabled = false;
     sendButton.disabled = true;
     sendButton.classList.remove("is-filed");
     sendButton.textContent = "SEND RULING";
     draftNote.textContent =
       "draft persists on this device · engage every axis to send";
+    resetRibbon();
+    if (text === "Loading axis manifest…") {
+      ribbon.setAttribute("aria-busy", "true");
+    }
     showMessage(text);
   }
 
@@ -267,6 +378,7 @@
     const title = card.dataset.briefTitle || "Untitled decision";
     const archived = card.dataset.briefStatus === "archived";
     breadcrumb.textContent = `DECISION #${issue} — ${title}`;
+    phoneReadingContext.textContent = `#${issue} · ${title}`;
     readingStatus.textContent = archived ? "ARCHIVED" : "AWAITING";
     readingStatus.hidden = false;
     expandLink.href = briefPath(card.dataset.briefName || "");
@@ -274,11 +386,60 @@
     updateNavigation();
   }
 
+  function showPhoneBrief() {
+    shell.classList.add("is-phone-reading");
+  }
+
+  function showPhoneInbox() {
+    shell.classList.remove("is-phone-reading");
+    state.card?.focus();
+  }
+
   function updateNavigation() {
     const cards = pendingCards();
     const index = state.card ? cards.indexOf(state.card) : -1;
     previousButton.disabled = index <= 0;
     nextButton.disabled = index < 0 || index >= cards.length - 1;
+  }
+
+  function knownAxisIds() {
+    return state.manifest
+      ? state.manifest.axes.map((axis) => axis.id)
+      : [];
+  }
+
+  function scrollBriefToAxis(axisId) {
+    const target = frame.contentWindow;
+    if (!target) return;
+    beginPendingScroll(axisId);
+    target.postMessage(
+      {source: CHROME_MESSAGE_SOURCE, type: "scroll-to", axis: axisId},
+      "*",
+    );
+  }
+
+  function requestBriefInView() {
+    const target = frame.contentWindow;
+    if (!target) return;
+    target.postMessage(
+      {source: CHROME_MESSAGE_SOURCE, type: "request-in-view"},
+      "*",
+    );
+  }
+
+  function setActiveAxis(axisId, {scrollBrief = false} = {}) {
+    if (!knownAxisIds().includes(axisId)) return;
+    if (state.card?.dataset.briefStatus === "archived") return;
+    if (state.activeAxisId === axisId) {
+      if (scrollBrief) scrollBriefToAxis(axisId);
+      return;
+    }
+    state.ribbonNoteOpen = false;
+    state.activeAxisId = axisId;
+    renderAxes();
+    renderRibbon();
+    updateCompleteness();
+    if (scrollBrief) scrollBriefToAxis(axisId);
   }
 
   function activateTab(name) {
@@ -482,6 +643,7 @@
 
   async function selectBrief(card) {
     if (state.card === card) return;
+    showPhoneBrief();
     const selection = ++state.loadSequence;
     state.card = card;
     for (const candidate of allCards()) {
@@ -489,6 +651,19 @@
     }
 
     setToolbar(card);
+    if (state.frameLoadHandler) {
+      frame.removeEventListener("load", state.frameLoadHandler);
+    }
+    const frameLoadHandler = () => {
+      if (state.frameLoadHandler === frameLoadHandler) {
+        state.frameLoadHandler = null;
+      }
+      if (selection !== state.loadSequence) return;
+      state.frameLoadedSequence = selection;
+      if (state.manifest) requestBriefInView();
+    };
+    state.frameLoadHandler = frameLoadHandler;
+    frame.addEventListener("load", frameLoadHandler, {once: true});
     frame.src = briefPath(card.dataset.briefName || "");
     frame.hidden = false;
     readingEmpty.hidden = true;
@@ -508,6 +683,7 @@
           `Ruling ${card.dataset.rulingSequence || "filed"} already acknowledges this brief.`,
           false,
         );
+        requestBriefInView();
         return;
       }
 
@@ -516,6 +692,7 @@
         manifest.axes.find((axis) => !axisComplete(axis))?.id || manifest.axes[0].id;
       state.filed = false;
       renderDocket();
+      requestBriefInView();
     } catch (error) {
       if (selection !== state.loadSequence) return;
       if (
@@ -565,6 +742,159 @@
     return "unruled — select to edit";
   }
 
+  function activeAxis() {
+    if (!state.manifest) return null;
+    return (
+      state.manifest.axes.find((axis) => axis.id === state.activeAxisId) ||
+      state.manifest.axes[0] ||
+      null
+    );
+  }
+
+  function chooseRibbonState(axis, mode, choice = null) {
+    if (state.submitting || state.filed) return;
+    const record = recordFor(axis);
+    state.activeAxisId = axis.id;
+    record.mode = mode;
+    record.choice = mode === "choice" ? choice : null;
+    state.ribbonNoteOpen =
+      mode === "discuss" ? true : state.ribbonNoteOpen && axis.notes;
+    saveDraft();
+    renderAxes();
+    renderRibbon();
+    updateCompleteness();
+    if (mode === "discuss") {
+      requestAnimationFrame(() => ribbonNoteTextarea.focus());
+    }
+  }
+
+  function ribbonPill(axis, text, className, selected, mode, choice = null) {
+    const pill = make("button", `ribbon-option-pill ${className}`.trim(), text);
+    pill.type = "button";
+    pill.disabled = state.submitting || state.filed;
+    pill.classList.toggle("is-selected", selected);
+    pill.setAttribute("aria-pressed", String(selected));
+    pill.addEventListener("click", () => {
+      chooseRibbonState(axis, mode, choice);
+    });
+    return pill;
+  }
+
+  function renderRibbon() {
+    if (!state.manifest || !state.draft) {
+      ribbonBody.hidden = true;
+      return;
+    }
+    ribbon.removeAttribute("aria-busy");
+    ribbonBody.hidden = false;
+    ribbonStepper.replaceChildren();
+    for (const axis of state.manifest.axes) {
+      const complete = axisComplete(axis);
+      const inView = state.activeAxisId === axis.id;
+      const dot = make("button", "ribbon-axis-dot");
+      dot.type = "button";
+      dot.classList.add(
+        inView ? "is-active" : complete ? "is-ruled" : "is-unruled",
+      );
+      dot.setAttribute("aria-pressed", String(inView));
+      dot.setAttribute(
+        "aria-label",
+        `${axis.label}: ${inView ? "in view" : complete ? "ruled" : "unruled"}`,
+      );
+      dot.title = `${axis.label} — ${inView ? "in view" : complete ? "ruled" : "unruled"}`;
+      dot.addEventListener("click", () => {
+        setActiveAxis(axis.id, {scrollBrief: true});
+      });
+      ribbonStepper.append(dot);
+    }
+
+    const axis = activeAxis();
+    if (!axis) {
+      ribbonAxisLabel.textContent = "";
+      ribbonAxisControls.replaceChildren();
+      return;
+    }
+    const record = recordFor(axis);
+    ribbonAxisLabel.textContent = axis.label;
+    ribbonAxisControls.setAttribute("aria-label", `${axis.label} choices`);
+    ribbonAxisControls.replaceChildren();
+    for (const option of axis.options) {
+      ribbonAxisControls.append(
+        ribbonPill(
+          axis,
+          option.label,
+          "",
+          record.mode === "choice" && record.choice === option.id,
+          "choice",
+          option.id,
+        ),
+      );
+    }
+    ribbonAxisControls.append(
+      ribbonPill(
+        axis,
+        "Defer",
+        "is-defer",
+        record.mode === "deferred",
+        "deferred",
+      ),
+      ribbonPill(
+        axis,
+        "Discuss",
+        "is-discuss",
+        record.mode === "discuss",
+        "discuss",
+      ),
+    );
+
+    const noteAvailable = axis.notes || record.mode === "discuss";
+    if (!noteAvailable) state.ribbonNoteOpen = false;
+    ribbonNoteToggle.hidden = !noteAvailable;
+    ribbonNoteToggle.disabled = state.submitting || state.filed;
+    ribbonNoteToggle.setAttribute(
+      "aria-expanded",
+      String(noteAvailable && state.ribbonNoteOpen),
+    );
+    ribbonNoteToggle.setAttribute("aria-label", `Show note for ${axis.label}`);
+    ribbonNotePanel.hidden = !noteAvailable || !state.ribbonNoteOpen;
+    ribbonNoteTextarea.disabled = state.submitting || state.filed;
+    ribbonNoteTextarea.value = record.note;
+    ribbonNoteTextarea.placeholder =
+      record.mode === "discuss"
+        ? "Required: what needs discussion?"
+        : "Add a note for this axis…";
+    ribbonNoteTextarea.setAttribute("aria-label", `${axis.label} note`);
+    ribbonNoteTextarea.required = record.mode === "discuss";
+    const noteMissing = record.mode === "discuss" && !record.note.trim();
+    ribbonNoteTextarea.setAttribute("aria-invalid", String(noteMissing));
+    ribbonNoteRequirement.hidden = !noteMissing;
+  }
+
+  function renderArchivedRibbon(manifest) {
+    resetRibbon();
+    ribbonBody.hidden = false;
+    ribbonAxisLabel.textContent = "ARCHIVED RULING";
+    ribbonNoteToggle.hidden = true;
+    const total = manifest ? manifest.axes.length : 0;
+    if (manifest) {
+      for (const axis of manifest.axes) {
+        const dot = make("button", "ribbon-axis-dot is-ruled");
+        dot.type = "button";
+        dot.disabled = true;
+        dot.setAttribute("aria-label", `${axis.label}: ruled`);
+        dot.title = `${axis.label} — ruled`;
+        ribbonStepper.append(dot);
+      }
+    }
+    ribbonProgress.textContent = total
+      ? `${total} of ${total} ruled`
+      : "ruling filed";
+    ribbonSendButton.disabled = true;
+    ribbonSendButton.classList.add("is-filed");
+    ribbonSendButton.textContent = "FILED";
+    ribbonSendButton.title = "This brief already has a ruling";
+  }
+
   function renderDocket() {
     if (!state.manifest || !state.draft) return;
     const pending = state.card?.dataset.rulingSubmissionPending === "true";
@@ -597,6 +927,7 @@
       showMessage("");
     }
     renderAxes();
+    renderRibbon();
     updateCompleteness();
   }
 
@@ -639,9 +970,7 @@
       heading.append(summary);
     }
     heading.addEventListener("click", () => {
-      state.activeAxisId = axis.id;
-      renderAxes();
-      updateCompleteness();
+      setActiveAxis(axis.id);
     });
     card.append(heading);
 
@@ -661,8 +990,10 @@
         pill.addEventListener("click", () => {
           record.mode = "choice";
           record.choice = option.id;
+          state.ribbonNoteOpen = state.ribbonNoteOpen && axis.notes;
           saveDraft();
           renderAxes();
+          renderRibbon();
           updateCompleteness();
         });
         pills.append(pill);
@@ -675,8 +1006,10 @@
       defer.addEventListener("click", () => {
         record.mode = "deferred";
         record.choice = null;
+        state.ribbonNoteOpen = state.ribbonNoteOpen && axis.notes;
         saveDraft();
         renderAxes();
+        renderRibbon();
         updateCompleteness();
       });
       pills.append(defer);
@@ -688,8 +1021,10 @@
       discuss.addEventListener("click", () => {
         record.mode = "discuss";
         record.choice = null;
+        state.ribbonNoteOpen = true;
         saveDraft();
         renderAxes();
+        renderRibbon();
         updateCompleteness();
         requestAnimationFrame(() => {
           axisList
@@ -727,6 +1062,7 @@
           note.setAttribute("aria-invalid", String(missing));
           requirement.hidden = !missing;
           saveDraft();
+          renderRibbon();
           updateCompleteness();
         });
         controls.append(note, requirement);
@@ -754,22 +1090,43 @@
     );
     meterFill.style.width = `${(count / total) * 100}%`;
     meterLabel.textContent = `${count} of ${total} ruled`;
+    ribbonProgress.textContent = `${count} of ${total} ruled`;
     updateCardProgress(count, total);
     const incomplete = total - count;
     sendButton.disabled =
       incomplete !== 0 || state.submitting || state.filed || uncertain;
+    ribbonSendButton.disabled = sendButton.disabled;
+    const captureLocked = state.submitting || state.filed;
+    for (const control of axisList.querySelectorAll(".option-pill, .axis-note")) {
+      control.disabled = captureLocked;
+    }
+    overallTextarea.disabled = captureLocked;
+    for (const control of ribbonAxisControls.querySelectorAll("button")) {
+      control.disabled = captureLocked;
+    }
+    ribbonNoteTextarea.disabled = captureLocked;
+    ribbonNoteToggle.disabled = captureLocked;
+    ribbon.removeAttribute("aria-busy");
     if (uncertain) {
       sendButton.textContent = "STATUS UNCERTAIN";
       sendButton.title = "Reload and check the Archive before resubmitting";
+      ribbonSendButton.textContent = "UNCERTAIN";
+      ribbonSendButton.title =
+        "Reload and check the Archive before resubmitting";
       draftNote.textContent = "reload · check archive before any resubmission";
     } else if (state.submitting) {
       sendButton.textContent = "FILING…";
       sendButton.title = "Ruling submission is in progress";
+      ribbon.setAttribute("aria-busy", "true");
+      ribbonSendButton.textContent = "FILING…";
+      ribbonSendButton.title = "Ruling submission is in progress";
     } else {
       sendButton.textContent = "SEND RULING";
       sendButton.title = incomplete
         ? `${incomplete} ${incomplete === 1 ? "axis is" : "axes are"} incomplete`
         : "File one ruling for this brief";
+      ribbonSendButton.textContent = "SEND RULING";
+      ribbonSendButton.title = sendButton.title;
     }
   }
 
@@ -814,6 +1171,7 @@
     sendButton.textContent = "RULING FILED";
     sendButton.title = "This brief already has a ruling";
     draftNote.textContent = "one ruling per brief · draft cleared after filing";
+    renderArchivedRibbon(manifest);
   }
 
   function composeRuling() {
@@ -1044,7 +1402,10 @@
     tab.addEventListener("click", () => activateTab(tab.dataset.listTab));
   }
   for (const card of allCards()) {
-    card.addEventListener("click", () => void selectBrief(card));
+    card.addEventListener("click", () => {
+      showPhoneBrief();
+      void selectBrief(card);
+    });
   }
   for (const resizer of shell.querySelectorAll("[data-resizer]")) {
     wireResizer(resizer);
@@ -1067,16 +1428,60 @@
       event.preventDefault();
     }
   });
+  phoneInboxButton.addEventListener("click", showPhoneInbox);
+  ribbonNoteToggle.addEventListener("click", () => {
+    const axis = activeAxis();
+    if (!axis) return;
+    const record = recordFor(axis);
+    if (!axis.notes && record.mode !== "discuss") return;
+    state.ribbonNoteOpen = !state.ribbonNoteOpen;
+    renderRibbon();
+    if (state.ribbonNoteOpen) {
+      requestAnimationFrame(() => ribbonNoteTextarea.focus());
+    }
+  });
+  ribbonNoteTextarea.addEventListener("input", () => {
+    const axis = activeAxis();
+    if (!axis || !state.draft || state.submitting || state.filed) return;
+    const record = recordFor(axis);
+    record.note = ribbonNoteTextarea.value;
+    const missing = record.mode === "discuss" && !record.note.trim();
+    ribbonNoteTextarea.setAttribute("aria-invalid", String(missing));
+    ribbonNoteRequirement.hidden = !missing;
+    saveDraft();
+    renderAxes();
+    updateCompleteness();
+  });
   overallTextarea.addEventListener("input", () => {
-    if (!state.draft) return;
+    if (!state.draft || state.submitting || state.filed) return;
     state.draft.overall = overallTextarea.value;
     saveDraft();
   });
   sendButton.addEventListener("click", () => void fileRuling());
+  ribbonSendButton.addEventListener("click", () => void fileRuling());
+  window.addEventListener("message", (event) => {
+    // contentWindow is a persistent WindowProxy across iframe navigations.
+    if (event.source !== frame.contentWindow) return;
+    if (state.frameLoadedSequence !== state.loadSequence) return;
+    if (!isValidBriefInViewMessage(event.data, knownAxisIds())) return;
+    if (
+      !shouldAcceptInViewReport(
+        state.pendingScrollAxis,
+        event.data.axis,
+      )
+    ) {
+      return;
+    }
+    if (state.pendingScrollAxis === event.data.axis) clearPendingScroll();
+    setActiveAxis(event.data.axis);
+  });
 
   updateNavigation();
   const initial = pendingCards()[0];
-  if (initial) {
+  const startsOnPhone =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(max-width: 760px)").matches;
+  if (initial && !startsOnPhone) {
     void selectBrief(initial);
   }
 })()

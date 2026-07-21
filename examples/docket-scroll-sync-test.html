@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Docket Scroll-Sync Test Brief</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      background: #0d0d0d;
+      color: #f4f0e6;
+    }
+    body { margin: 0; }
+    main { width: min(42rem, calc(100% - 2rem)); margin: 0 auto; padding: 2rem 0 35vh; }
+    header { padding: 1rem 0 2rem; }
+    header p { color: #aaa79e; }
+    [data-axis] {
+      min-height: 78vh;
+      scroll-margin-top: 1rem;
+      padding: 1.25rem;
+      border: 1px solid #45384f;
+      border-radius: .75rem;
+      margin-bottom: 1.25rem;
+      background: #17151a;
+    }
+    [data-axis] h2 { margin-top: 0; color: #e39acb; }
+    .spacer { height: 32vh; border-bottom: 1px dashed #45384f; }
+    code { color: #efa487; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Docket Scroll-Sync Test Brief</h1>
+      <p>
+        Scroll each long section to exercise brief-to-chrome reporting, or tap
+        the ribbon dots to exercise chrome-to-brief navigation.
+      </p>
+    </header>
+    <section data-axis="scope">
+      <h2>Axis 1 · Scope</h2>
+      <p>The reporter identifies this section with <code>data-axis="scope"</code>.</p>
+      <div class="spacer" aria-hidden="true"></div>
+      <p>Keep scrolling to bring Evolution into view.</p>
+    </section>
+    <section data-axis="evolution">
+      <h2>Axis 2 · Evolution</h2>
+      <p>This middle anchor makes both scroll directions easy to observe.</p>
+      <div class="spacer" aria-hidden="true"></div>
+      <p>Keep scrolling to bring Custody into view.</p>
+    </section>
+    <section data-axis="custody">
+      <h2>Axis 3 · Custody</h2>
+      <p>This final anchor verifies that the bottom-most axis can become active.</p>
+      <div class="spacer" aria-hidden="true"></div>
+    </section>
+  </main>
+  <script data-arachne-brief-scroll-sync>
+/*
+ * Arachne brief scroll-sync reporter.
+ *
+ * Copy this file verbatim into an inline script block in a decision brief.
+ * The brief iframe has an opaque sandbox origin, so this block deliberately
+ * has no external dependencies and coordinates with the chrome by postMessage.
+ */
+(() => {
+  "use strict";
+
+  const BRIEF_SOURCE = "arachne-brief";
+  const CHROME_SOURCE = "arachne-chrome";
+  let framePending = false;
+  let lastReportedAxis = null;
+
+  function hasExactKeys(value, expected) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const actual = Object.keys(value).sort();
+    return (
+      actual.length === expected.length &&
+      expected.every((key, index) => actual[index] === key)
+    );
+  }
+
+  function topmostVisibleAxis() {
+    const anchors = document.querySelectorAll("[data-axis]");
+    const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight;
+    let visible = null;
+    let visibleTop = Number.POSITIVE_INFINITY;
+    let nearest = null;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+
+    for (const anchor of anchors) {
+      const rect = anchor.getBoundingClientRect();
+      if (rect.bottom > 0 && rect.top < viewportHeight) {
+        if (rect.top < visibleTop) {
+          visible = anchor;
+          visibleTop = rect.top;
+        }
+        continue;
+      }
+      const distance = rect.top >= viewportHeight ? rect.top - viewportHeight : -rect.bottom;
+      if (distance < nearestDistance) {
+        nearest = anchor;
+        nearestDistance = distance;
+      }
+    }
+    return visible || nearest;
+  }
+
+  function reportInView() {
+    framePending = false;
+    const anchor = topmostVisibleAxis();
+    const axis = anchor ? anchor.getAttribute("data-axis") : "";
+    if (!axis || axis === lastReportedAxis) return;
+    lastReportedAxis = axis;
+    window.parent.postMessage(
+      {source: BRIEF_SOURCE, type: "in-view", axis},
+      "*",
+    );
+  }
+
+  function scheduleReport() {
+    if (framePending) return;
+    framePending = true;
+    window.requestAnimationFrame(reportInView);
+  }
+
+  window.addEventListener("scroll", scheduleReport, {passive: true});
+  window.addEventListener("resize", scheduleReport);
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent) return;
+    const data = event.data;
+    if (
+      hasExactKeys(data, ["source", "type"]) &&
+      data.source === CHROME_SOURCE &&
+      data.type === "request-in-view"
+    ) {
+      lastReportedAxis = null;
+      reportInView();
+      return;
+    }
+    if (!hasExactKeys(data, ["axis", "source", "type"])) return;
+    if (
+      data.source !== CHROME_SOURCE ||
+      data.type !== "scroll-to" ||
+      typeof data.axis !== "string"
+    ) {
+      return;
+    }
+    const anchor = Array.from(document.querySelectorAll("[data-axis]")).find(
+      (candidate) => candidate.getAttribute("data-axis") === data.axis,
+    );
+    if (!anchor) {
+      console.warn(
+        `Arachne brief scroll sync could not find a data-axis anchor for "${data.axis}".`,
+      );
+      return;
+    }
+    anchor.scrollIntoView({behavior: "smooth", block: "start"});
+  });
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", scheduleReport, {once: true});
+  } else {
+    scheduleReport();
+  }
+})();
+  </script>
+</body>
+</html>
