@@ -23,25 +23,6 @@ import server as arachne_server
 
 REPO = Path(__file__).resolve().parents[1]
 
-
-def axis_manifest(issue: str) -> dict:
-    return {
-        "contract": "v2",
-        "issue": issue,
-        "title": f"Decision {issue}",
-        "overall_notes": False,
-        "axes": [
-            {
-                "id": "choice",
-                "label": "Choice",
-                "select": "one",
-                "notes": False,
-                "options": [{"id": "accept", "label": "Accept"}],
-            }
-        ],
-    }
-
-
 def free_port() -> int:
     with socket.socket() as candidate:
         candidate.bind((arachne_server.LOOPBACK_HOST, 0))
@@ -512,42 +493,46 @@ class TLSServerTests(unittest.TestCase):
 
 
 class PublicationTransactionTests(unittest.TestCase):
-    def test_reserved_docket_option_ids_are_rejected(self) -> None:
-        for sentinel in sorted(page_contract.RESERVED_OPTION_IDS):
-            with self.subTest(sentinel=sentinel):
-                manifest = axis_manifest(f"reserved-{sentinel}")
-                manifest["axes"][0]["options"][0]["id"] = sentinel
-                with self.assertRaisesRegex(ValueError, "reserved docket sentinel"):
-                    page_contract.validate_axes_manifest(manifest)
-
-    def test_v2_manifest_is_normalized_stored_and_read_from_the_sidecar(self) -> None:
+    def test_issue_only_sidecar_is_stored_and_read(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             pages = Path(temporary)
-            manifest = axis_manifest("sidecar")
-            manifest.pop("overall_notes")
             publication = page_contract.publish_html(
                 "decision_sidecar.html",
                 "<!doctype html><main>Argument only</main>",
                 pages,
-                manifest,
+                issue="sidecar",
             )
 
-            expected = {**manifest, "overall_notes": False}
             self.assertEqual(publication.issue, "sidecar")
             self.assertEqual(
                 page_contract.read_page_issue(pages, "decision_sidecar.html"),
                 "sidecar",
-            )
-            self.assertEqual(
-                page_contract.read_page_axes(pages, "decision_sidecar.html"),
-                expected,
             )
             sidecar = json.loads(
                 page_contract.metadata_path(
                     pages, "decision_sidecar.html"
                 ).read_text(encoding="utf-8")
             )
-            self.assertEqual(sidecar, {"issue": "sidecar", "axes": expected})
+            self.assertEqual(sidecar, {"issue": "sidecar"})
+
+    def test_omitted_issue_is_inferred_from_the_page_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pages = Path(temporary)
+            publication = page_contract.publish_html(
+                "decision_476_relationship_drift.html",
+                "<!doctype html><main>Argument only</main>",
+                pages,
+            )
+
+            self.assertEqual(publication.issue, "476")
+            self.assertEqual(
+                json.loads(
+                    page_contract.metadata_path(
+                        pages, publication.name
+                    ).read_text(encoding="utf-8")
+                ),
+                {"issue": "476"},
+            )
 
     def test_concurrent_same_name_publications_never_interleave(self) -> None:
         # PR #10 second-review P1: page and sidecar are two commits; racing
@@ -567,7 +552,6 @@ class PublicationTransactionTests(unittest.TestCase):
                             "decision_race.html",
                             html,
                             pages,
-                            axis_manifest(marker),
                             issue=marker,
                         )
                 except Exception as exc:  # noqa: BLE001 - surfaced via assert
@@ -584,10 +568,12 @@ class PublicationTransactionTests(unittest.TestCase):
             self.assertEqual(errors, [])
             recorded = page_contract.read_page_issue(pages, "decision_race.html")
             self.assertIn(recorded, {"alpha", "beta"})
-            axes = page_contract.read_page_axes(pages, "decision_race.html")
-            self.assertIsNotNone(axes)
-            assert axes is not None
-            self.assertEqual(axes["issue"], recorded)
+            sidecar = json.loads(
+                page_contract.metadata_path(
+                    pages, "decision_race.html"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(sidecar, {"issue": recorded})
             final_html = (pages / "decision_race.html").read_text(encoding="utf-8")
             self.assertIn(f"variant {recorded}", final_html)
 

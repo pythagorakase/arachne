@@ -109,7 +109,7 @@ textarea:focus-visible,
 
 .app-frame {
   --list-width: 320px;
-  --docket-width: 316px;
+  --nav-width: 316px;
   display: flex;
   width: 100%;
   min-width: 1000px;
@@ -129,7 +129,7 @@ textarea:focus-visible,
 }
 
 .list-pane,
-.docket-pane {
+.ruling-nav {
   flex: none;
   min-width: 0;
   overflow: hidden;
@@ -518,29 +518,39 @@ textarea:focus-visible,
   font-size: 26px;
 }
 
-.docket-pane {
+.ruling-nav {
   display: flex;
-  width: var(--docket-width);
+  width: var(--nav-width);
   flex-direction: column;
 }
 
-.docket-header {
+.ruling-nav-header {
   flex: none;
   padding: 16px 18px 12px;
   border-bottom: 1px solid var(--purple-low);
 }
 
-.docket-title {
-  color: var(--parchment-strong);
-  font: 400 11.5px/1.2 "Cinzel", serif;
-  letter-spacing: .24em;
+.ruling-nav-kicker {
+  color: var(--accent-soft);
+  font: 400 9px/1.2 "Cinzel", serif;
+  letter-spacing: .2em;
 }
 
-.docket-meter {
+.ruling-nav-decision-title {
+  margin-top: 6px;
+  overflow: hidden;
+  color: var(--parchment-strong);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.ruling-nav-meter {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 .meter-track {
@@ -554,7 +564,7 @@ textarea:focus-visible,
   white-space: nowrap;
 }
 
-.docket-body {
+.ruling-nav-body {
   min-height: 0;
   flex: 1;
   overflow: auto;
@@ -562,23 +572,23 @@ textarea:focus-visible,
   scrollbar-color: var(--purple-border) transparent;
 }
 
-.docket-message {
+.ruling-nav-message {
   margin: 5px 2px 12px;
   color: var(--parchment-dim);
   font-size: 12.5px;
   font-style: italic;
 }
 
-.docket-message:empty {
+.ruling-nav-message:empty {
   display: none;
 }
 
-.docket-message.is-error {
+.ruling-nav-message.is-error {
   color: var(--coral);
   font-style: normal;
 }
 
-.docket-message.is-acknowledged {
+.ruling-nav-message.is-acknowledged {
   padding: 9px 10px;
   border: 1px solid hsl(15 75% 60% / .35);
   border-radius: 5px;
@@ -587,197 +597,69 @@ textarea:focus-visible,
   font-style: normal;
 }
 
-.axis-list {
+.ruling-nav-outline {
   display: flex;
+  margin: 0;
+  padding: 0;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
+  list-style: none;
 }
 
-.axis-card {
-  border: 1px solid var(--purple-mid);
-  border-radius: 6px;
-  background: transparent;
-}
-
-.axis-card.is-unruled {
-  border-style: dashed;
-}
-
-.axis-card.is-editing {
-  border-color: var(--accent);
-  border-style: solid;
-  background: hsl(270 40% 20% / .3);
-}
-
-.axis-card.is-archived {
-  opacity: .66;
-}
-
-.axis-heading {
-  display: block;
+.ruling-nav-link {
+  display: flex;
   width: 100%;
-  padding: 10px 12px;
-  border: 0;
-  border-radius: inherit;
+  min-height: 42px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
   background: transparent;
-  color: inherit;
+  color: var(--parchment-dim);
   cursor: pointer;
   text-align: left;
 }
 
-.axis-card:not(.is-editing) .axis-heading:hover {
+.ruling-nav-link:hover {
+  border-color: var(--purple-border);
   background: hsl(270 40% 20% / .22);
-}
-
-.axis-title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.axis-check {
-  flex: none;
-  color: var(--coral);
-  font-size: 12px;
-}
-
-.axis-label {
-  min-width: 0;
   color: var(--parchment-muted);
-  font: 400 10px/1.35 "Cinzel", serif;
-  letter-spacing: .08em;
+}
+
+.ruling-nav-link.is-active {
+  border-color: var(--accent);
+  background: hsl(270 40% 20% / .3);
+  color: var(--parchment-strong);
+}
+
+.ruling-nav-glyph {
+  flex: none;
+  width: 15px;
+  color: var(--parchment-dim);
+  font-size: 14px;
+  line-height: 1;
+  text-align: center;
+}
+
+.ruling-nav-link.is-answered .ruling-nav-glyph {
+  color: var(--coral);
+}
+
+.ruling-nav-label {
+  min-width: 0;
+  font: 400 10.5px/1.35 "Cinzel", serif;
+  letter-spacing: .06em;
   overflow-wrap: anywhere;
 }
 
-.axis-card.is-unruled .axis-label {
-  color: var(--parchment-dim);
-}
-
-.axis-card.is-editing .axis-label {
-  color: var(--parchment-strong);
-}
-
-.in-view-tag {
-  flex: none;
-  margin-left: auto;
-  color: var(--coral);
-  font: 400 8.5px/1.2 "Cinzel", serif;
-  letter-spacing: .12em;
-}
-
-.axis-summary {
-  display: block;
-  margin-top: 4px;
-  color: var(--parchment-strong);
-  font-size: 13.5px;
-  line-height: 1.3;
-}
-
-.axis-summary.is-muted {
-  color: var(--parchment-dim);
-  font-size: 12.5px;
-  font-style: italic;
-}
-
-.note-count {
-  color: var(--parchment-dim);
-  font-size: 11.5px;
-}
-
-.axis-controls {
-  padding: 0 12px 12px;
-}
-
-.option-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.option-pill {
-  padding: 5px 10px;
-  border: 1px solid var(--purple-border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--parchment-muted);
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1.25;
-  text-align: left;
-}
-
-.option-pill:hover {
-  border-color: var(--accent);
-  color: var(--parchment-strong);
-}
-
-.option-pill.is-selected {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--parchment-bright);
-}
-
-.option-pill.is-discuss:not(.is-selected) {
-  border-color: hsl(15 75% 60% / .45);
-  color: var(--coral);
-}
-
-.axis-note,
-.overall-note textarea {
-  width: 100%;
-  resize: vertical;
-  border: 1px solid var(--purple-mid);
-  border-radius: 5px;
-  background: var(--frame);
-  color: var(--parchment-strong);
-  font-size: 12.5px;
-  line-height: 1.4;
-  user-select: text;
-}
-
-.axis-note {
-  min-height: 58px;
-  margin-top: 9px;
-  padding: 7px 9px;
-}
-
-.axis-note::placeholder,
-.overall-note textarea::placeholder {
-  color: var(--parchment-dim);
-  font-style: italic;
-  opacity: 1;
-}
-
-.axis-note[aria-invalid="true"] {
-  border-color: var(--coral);
-}
-
-.discuss-requirement {
-  margin: 5px 2px 0;
-  color: var(--coral);
-  font-size: 11px;
-}
-
-.docket-footer {
+.ruling-nav-footer {
   display: flex;
   flex: none;
   padding: 13px 15px 14px;
   flex-direction: column;
   gap: 9px;
   border-top: 1px solid var(--purple-low);
-}
-
-.overall-note > span {
-  display: block;
-  margin-bottom: 5px;
-  color: var(--parchment-muted);
-  font: 400 9px/1.2 "Cinzel", serif;
-  letter-spacing: .12em;
-}
-
-.overall-note textarea {
-  min-height: 64px;
-  padding: 7px 9px;
 }
 
 .send-ruling {
@@ -916,7 +798,7 @@ textarea:focus-visible,
   }
 
   .pane-resizer,
-  .docket-pane {
+  .ruling-nav {
     display: none;
   }
 
@@ -1098,7 +980,7 @@ textarea:focus-visible,
     gap: 7px;
   }
 
-  .ribbon-axis-stepper {
+  .ribbon-part-stepper {
     display: flex;
     min-height: 30px;
     align-items: center;
@@ -1106,7 +988,7 @@ textarea:focus-visible,
     gap: 1px;
   }
 
-  .ribbon-axis-dot {
+  .ribbon-part-dot {
     position: relative;
     display: grid;
     width: 30px;
@@ -1119,7 +1001,7 @@ textarea:focus-visible,
     cursor: pointer;
   }
 
-  .ribbon-axis-dot::before {
+  .ribbon-part-dot::before {
     width: 7px;
     height: 7px;
     border: 1px solid var(--purple-high);
@@ -1129,138 +1011,20 @@ textarea:focus-visible,
     transition: transform 120ms ease-out, background 120ms ease-out;
   }
 
-  .ribbon-axis-dot.is-ruled::before {
+  .ribbon-part-dot.is-answered::before {
     border-color: var(--coral);
     background: var(--coral);
   }
 
-  .ribbon-axis-dot.is-active::before {
+  .ribbon-part-dot.is-active::before {
     border-color: var(--accent);
     background: var(--accent);
     box-shadow: 0 0 0 3px hsl(320 55% 48% / .2);
     transform: scale(1.45);
   }
 
-  .ribbon-axis-dot:disabled {
+  .ribbon-part-dot:disabled {
     cursor: default;
-  }
-
-  .ribbon-axis-row {
-    display: flex;
-    min-width: 0;
-    align-items: end;
-    gap: 8px;
-  }
-
-  .ribbon-axis-capture {
-    min-width: 0;
-    flex: 1;
-  }
-
-  .ribbon-axis-label {
-    margin: 0 0 5px 2px;
-    overflow: hidden;
-    color: var(--parchment-muted);
-    font: 400 9.5px/1.2 "Cinzel", serif;
-    letter-spacing: .12em;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .ribbon-option-pills {
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
-    padding: 1px 1px 3px;
-    scrollbar-width: none;
-  }
-
-  .ribbon-option-pills::-webkit-scrollbar {
-    display: none;
-  }
-
-  .ribbon-option-pill {
-    min-height: 32px;
-    flex: none;
-    padding: 5px 11px;
-    border: 1px solid var(--purple-border);
-    border-radius: 999px;
-    background: transparent;
-    color: var(--parchment-muted);
-    cursor: pointer;
-    font-size: 12px;
-    line-height: 1.2;
-    white-space: nowrap;
-  }
-
-  .ribbon-option-pill:hover {
-    border-color: var(--accent);
-    color: var(--parchment-strong);
-  }
-
-  .ribbon-option-pill.is-selected {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: var(--parchment-bright);
-  }
-
-  .ribbon-option-pill.is-defer:not(.is-selected) {
-    border-style: dashed;
-    color: var(--parchment-dim);
-  }
-
-  .ribbon-option-pill.is-discuss:not(.is-selected) {
-    border-color: hsl(15 75% 60% / .45);
-    color: var(--coral);
-  }
-
-  .ribbon-note-toggle {
-    display: grid;
-    width: 44px;
-    height: 44px;
-    flex: none;
-    padding: 0;
-    border: 1px solid var(--purple-border);
-    border-radius: 5px;
-    place-items: center;
-    background: transparent;
-    color: var(--parchment-muted);
-    cursor: pointer;
-    font-size: 15px;
-  }
-
-  .ribbon-note-toggle[aria-expanded="true"] {
-    border-color: var(--accent);
-    color: var(--parchment-strong);
-  }
-
-  .ribbon-note-toggle:disabled {
-    opacity: .45;
-    cursor: not-allowed;
-  }
-
-  .ribbon-note-panel textarea {
-    width: 100%;
-    min-height: 64px;
-    resize: vertical;
-    padding: 7px 9px;
-    border: 1px solid var(--purple-mid);
-    border-radius: 5px;
-    background: var(--frame);
-    color: var(--parchment-strong);
-    font-size: 12.5px;
-    line-height: 1.4;
-    user-select: text;
-  }
-
-  .ribbon-note-panel textarea[aria-invalid="true"] {
-    border-color: var(--coral);
-  }
-
-  .ribbon-note-requirement {
-    margin: 4px 2px 0;
-    color: var(--coral);
-    font-size: 10.5px;
   }
 
   .ribbon-footer {

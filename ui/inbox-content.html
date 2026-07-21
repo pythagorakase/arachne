@@ -58,75 +58,55 @@
         sandbox="allow-scripts" data-reading-frame hidden></iframe>
       <div class="reading-empty" data-reading-empty>
         <div class="empty-glyph" aria-hidden="true">◇</div>
-        <p>Select an awaiting brief to open its argument and ruling docket.</p>
+        <p>Select an awaiting brief to open its argument and decision outline.</p>
       </div>
     </div>
   </section>
 
   <div class="pane-resizer" role="separator" tabindex="0"
-    aria-label="Resize ruling docket" aria-orientation="vertical"
+    aria-label="Resize ruling navigation" aria-orientation="vertical"
     aria-valuemin="260" aria-valuemax="420" aria-valuenow="316"
-    data-resizer="docket"><span></span></div>
+    data-resizer="nav"><span></span></div>
 
-  <aside class="docket-pane" data-docket aria-label="Ruling docket">
-    <header class="docket-header">
-      <div class="docket-title">RULING DOCKET</div>
-      <div class="docket-meter" aria-label="Ruling completeness">
-        <div class="meter-track"><span data-docket-meter-fill></span></div>
-        <span class="meter-label" data-docket-meter-label>0 of 0 ruled</span>
+  <nav class="ruling-nav" data-ruling-nav aria-label="Decision outline">
+    <header class="ruling-nav-header">
+      <div class="ruling-nav-kicker">DECISION OUTLINE</div>
+      <div class="ruling-nav-decision-title" data-nav-decision-title>
+        Select a brief
+      </div>
+      <div class="ruling-nav-meter" aria-label="Decision completeness">
+        <div class="meter-track"><span data-nav-meter-fill></span></div>
+        <span class="meter-label" data-nav-meter-label>0 of 0 decided</span>
       </div>
     </header>
-    <div class="docket-body">
-      <p class="docket-message" role="status" data-docket-message>
+    <div class="ruling-nav-body">
+      <p class="ruling-nav-message" role="status" data-nav-message>
         Select a brief to begin a ruling.
       </p>
-      <div class="axis-list" data-axis-list></div>
+      <ol class="ruling-nav-outline" data-part-outline></ol>
     </div>
-    <footer class="docket-footer">
-      <label class="overall-note" data-overall-note hidden>
-        <span>OVERALL NOTE</span>
-        <textarea rows="3" placeholder="Add an overall note…"
-          data-overall-textarea></textarea>
-      </label>
+    <footer class="ruling-nav-footer">
       <button class="send-ruling" type="button" disabled data-send-ruling>
         SEND RULING
       </button>
       <p class="draft-note" data-draft-note>
-        draft persists on this device · engage every axis to send
+        draft persists on this device · decide every part to send
       </p>
     </footer>
-  </aside>
+  </nav>
 
-  <section class="ruling-ribbon" aria-label="Ruling Ribbon"
+  <nav class="ruling-ribbon" aria-label="Decision navigation"
     data-ruling-ribbon>
     <p class="ribbon-message" role="status" aria-live="polite"
       data-ribbon-message>Select a brief to begin a ruling.</p>
     <div class="ribbon-body" data-ribbon-body hidden>
-      <div class="ribbon-axis-stepper" role="group" aria-label="Ruling axes"
-        data-ribbon-axis-stepper></div>
-      <div class="ribbon-axis-row">
-        <div class="ribbon-axis-capture">
-          <div class="ribbon-axis-label" data-ribbon-axis-label></div>
-          <div class="ribbon-option-pills" role="group"
-            data-ribbon-axis-controls></div>
-        </div>
-        <button class="ribbon-note-toggle" type="button"
-          title="Note for this axis" aria-label="Show note for this axis"
-          aria-expanded="false" data-ribbon-note-toggle>✎</button>
-      </div>
-      <div class="ribbon-note-panel" data-ribbon-note-panel hidden>
-        <textarea rows="3" placeholder="Add a note for this axis…"
-          data-ribbon-note></textarea>
-        <p class="ribbon-note-requirement"
-          data-ribbon-note-requirement hidden>
-          Discuss requires a note before this axis is complete.
-        </p>
-      </div>
+      <div class="ribbon-part-stepper" role="group"
+        aria-label="Decision parts" data-ribbon-part-stepper></div>
       <div class="ribbon-footer">
-        <span class="ribbon-progress" data-ribbon-progress>0 of 0 ruled</span>
+        <span class="ribbon-progress" data-ribbon-progress>0 of 0 decided</span>
         <button class="ribbon-send" type="button" disabled
           data-ribbon-send>SEND RULING</button>
       </div>
     </div>
-  </section>
+  </nav>
 </main>

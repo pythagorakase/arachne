@@ -1,24 +1,15 @@
 (() => {
   "use strict";
 
-  const DEFERRED_SENTINEL = "deferred";
-  const DISCUSS_SENTINEL = "discuss";
-  const DRAFT_PREFIX = "arachne:docket:v2:";
+  const DRAFT_PREFIX = "arachne:draft:v3:";
   const BRIEF_MESSAGE_SOURCE = "arachne-brief";
   const CHROME_MESSAGE_SOURCE = "arachne-chrome";
+  const COLLECT_TIMEOUT_MS = 1500;
   const PENDING_SCROLL_TIMEOUT_MS = 700;
   const LIST_MIN = 240;
   const LIST_MAX = 440;
-  const DOCKET_MIN = 260;
-  const DOCKET_MAX = 420;
-
-  class ResponseError extends Error {
-    constructor(message, status) {
-      super(message);
-      this.name = "ResponseError";
-      this.status = status;
-    }
-  }
+  const NAV_MIN = 260;
+  const NAV_MAX = 420;
 
   class DefinitelyNotFiledError extends Error {
     constructor(message, status) {
@@ -35,78 +26,154 @@
     }
   }
 
-  function draftRecord(draft, axis) {
-    const record = draft?.axes?.[axis.id];
-    if (!record || typeof record !== "object") {
-      throw new Error(`axis ${axis.id} has no draft record`);
-    }
-    return record;
+  function isPlainObject(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
   }
 
-  function axisCompleteForDraft(axis, draft) {
-    const record = draftRecord(draft, axis);
-    if (record.mode === "choice") {
-      return axis.options.some((option) => option.id === record.choice);
+  function hasExactKeys(value, expected) {
+    if (!isPlainObject(value)) return false;
+    const actual = Object.keys(value).sort();
+    const wanted = [...expected].sort();
+    return (
+      actual.length === wanted.length &&
+      wanted.every((key, index) => actual[index] === key)
+    );
+  }
+
+  function isValidBriefCaptureMessage(data) {
+    if (
+      !hasExactKeys(data, [
+        "allAnswered",
+        "form",
+        "issue",
+        "markdown",
+        "parts",
+        "source",
+        "type",
+      ]) ||
+      data.source !== BRIEF_MESSAGE_SOURCE ||
+      data.type !== "capture" ||
+      typeof data.issue !== "string" ||
+      typeof data.markdown !== "string" ||
+      typeof data.allAnswered !== "boolean" ||
+      !Array.isArray(data.parts) ||
+      !isPlainObject(data.form)
+    ) {
+      return false;
     }
-    if (record.mode === "deferred") return true;
-    if (record.mode === "discuss") {
-      return typeof record.note === "string" && Boolean(record.note.trim());
+    const ids = new Set();
+    for (const part of data.parts) {
+      if (
+        !hasExactKeys(part, ["answered", "id", "label"]) ||
+        typeof part.id !== "string" ||
+        !part.id ||
+        typeof part.label !== "string" ||
+        typeof part.answered !== "boolean" ||
+        ids.has(part.id)
+      ) {
+        return false;
+      }
+      ids.add(part.id);
     }
+    return (
+      data.allAnswered ===
+      (data.parts.length > 0 && data.parts.every((part) => part.answered))
+    );
+  }
+
+  function isValidBriefInViewMessage(data, knownPartIds) {
+    if (
+      !hasExactKeys(data, ["axis", "source", "type"]) ||
+      data.source !== BRIEF_MESSAGE_SOURCE ||
+      data.type !== "in-view" ||
+      typeof data.axis !== "string"
+    ) {
+      return false;
+    }
+    if (Array.isArray(knownPartIds)) return knownPartIds.includes(data.axis);
+    if (knownPartIds instanceof Set) return knownPartIds.has(data.axis);
     return false;
   }
 
-  function composeRulingPayload(manifest, draft) {
-    if (!manifest || !draft) {
-      throw new Error("no axis manifest is loaded");
-    }
-    const incomplete = manifest.axes.filter(
-      (axis) => !axisCompleteForDraft(axis, draft),
+  function isValidBriefRulingMessage(data) {
+    return (
+      hasExactKeys(data, [
+        "allAnswered",
+        "form",
+        "markdown",
+        "source",
+        "token",
+        "type",
+      ]) &&
+      data.source === BRIEF_MESSAGE_SOURCE &&
+      data.type === "ruling" &&
+      typeof data.token === "string" &&
+      data.token.length > 0 &&
+      typeof data.markdown === "string" &&
+      typeof data.allAnswered === "boolean" &&
+      isPlainObject(data.form)
     );
-    if (incomplete.length) {
-      throw new Error(
-        `cannot compose while ${incomplete.map((axis) => axis.label).join(", ")} remain incomplete`,
-      );
-    }
+  }
 
-    const form = Object.create(null);
-    const lines = [];
-    for (const axis of manifest.axes) {
-      const record = draftRecord(draft, axis);
-      let markdownChoice;
-      if (record.mode === "choice") {
-        const option = axis.options.find((item) => item.id === record.choice);
-        if (!option) throw new Error(`axis ${axis.id} has an unknown option`);
-        form[axis.id] = option.id;
-        markdownChoice = option.label;
-      } else if (record.mode === "deferred") {
-        form[axis.id] = DEFERRED_SENTINEL;
-        markdownChoice = "Defer [deferred]";
-      } else if (record.mode === "discuss") {
-        form[axis.id] = DISCUSS_SENTINEL;
-        markdownChoice = "Discuss — see notes [discuss]";
-      } else {
-        throw new Error(`axis ${axis.id} has no ruling state`);
-      }
-
-      if (typeof record.note !== "string") {
-        throw new Error(`axis ${axis.id} note is not text`);
-      }
-      const note = record.note.trim();
-      const emitNote = axis.notes || record.mode === "discuss";
-      if (emitNote) form[`${axis.id}-notes`] = note;
-      lines.push(`${axis.label}: ${markdownChoice}`);
-      if (emitNote && note) lines.push(`${axis.label} notes: ${note}`);
+  function makeCollectMessage(token) {
+    if (typeof token !== "string" || !token) {
+      throw new TypeError("collect token must be a non-empty string");
     }
+    return {source: CHROME_MESSAGE_SOURCE, type: "collect", token};
+  }
 
-    if (manifest.overall_notes) {
-      if (typeof draft.overall !== "string") {
-        throw new Error("overall note is not text");
-      }
-      const overall = draft.overall.trim();
-      form.overall = overall;
-      lines.push("", `Overall: ${overall}`);
+  function rulingMatchesPendingToken(ruling, pendingToken) {
+    return (
+      isValidBriefRulingMessage(ruling) &&
+      typeof pendingToken === "string" &&
+      ruling.token === pendingToken
+    );
+  }
+
+  function formShapeFingerprint(form) {
+    if (!isPlainObject(form)) {
+      throw new TypeError("draft form must be a plain object");
     }
-    return {issue: manifest.issue, markdown: lines.join("\n"), form};
+    return JSON.stringify(Object.keys(form).sort());
+  }
+
+  function makeDraftRecord(form) {
+    return {fingerprint: formShapeFingerprint(form), form};
+  }
+
+  function isValidDraftRecord(value) {
+    return (
+      hasExactKeys(value, ["fingerprint", "form"]) &&
+      typeof value.fingerprint === "string" &&
+      isPlainObject(value.form)
+    );
+  }
+
+  function draftMatchesForm(draft, form) {
+    return (
+      isValidDraftRecord(draft) &&
+      draft.fingerprint === formShapeFingerprint(form)
+    );
+  }
+
+  function isMessageFromCurrentBrief(
+    eventSource,
+    frameWindow,
+    documentVouched,
+    frameLoadedSequence,
+    loadSequence,
+  ) {
+    return (
+      eventSource === frameWindow &&
+      documentVouched &&
+      frameLoadedSequence === loadSequence
+    );
+  }
+
+  function shouldAcceptInViewReport(pendingScrollPart, reportedPart) {
+    return pendingScrollPart === null || pendingScrollPart === reportedPart;
   }
 
   async function readRulingAcknowledgement(response, submittedIssue) {
@@ -132,11 +199,7 @@
         `the server returned HTTP ${response.status} without a readable error detail`,
       );
     }
-    if (
-      !acknowledgement ||
-      typeof acknowledgement !== "object" ||
-      Array.isArray(acknowledgement)
-    ) {
+    if (!isPlainObject(acknowledgement)) {
       throw new AmbiguousSubmissionError(
         "the ruling acknowledgement was not a JSON object",
       );
@@ -155,38 +218,18 @@
       : "ambiguous";
   }
 
-  function isValidBriefInViewMessage(data, knownAxisIds) {
-    if (!data || typeof data !== "object" || Array.isArray(data)) return false;
-    const keys = Object.keys(data).sort();
-    if (
-      keys.length !== 3 ||
-      keys[0] !== "axis" ||
-      keys[1] !== "source" ||
-      keys[2] !== "type"
-    ) {
-      return false;
-    }
-    if (
-      data.source !== BRIEF_MESSAGE_SOURCE ||
-      data.type !== "in-view" ||
-      typeof data.axis !== "string"
-    ) {
-      return false;
-    }
-    if (Array.isArray(knownAxisIds)) return knownAxisIds.includes(data.axis);
-    if (knownAxisIds instanceof Set) return knownAxisIds.has(data.axis);
-    return false;
-  }
-
-  function shouldAcceptInViewReport(pendingScrollAxis, reportedAxis) {
-    return pendingScrollAxis === null || pendingScrollAxis === reportedAxis;
-  }
-
   if (typeof module !== "undefined" && module.exports) {
     module.exports = Object.freeze({
-      composeRulingPayload,
+      draftMatchesForm,
+      formShapeFingerprint,
+      isValidBriefCaptureMessage,
       isValidBriefInViewMessage,
+      isValidBriefRulingMessage,
+      isMessageFromCurrentBrief,
+      makeCollectMessage,
+      makeDraftRecord,
       readRulingAcknowledgement,
+      rulingMatchesPendingToken,
       shouldAcceptInViewReport,
       submissionFailureKind,
     });
@@ -218,7 +261,7 @@
   }
 
   const listPane = required("[data-list-pane]");
-  const docketPane = required("[data-docket]");
+  const navPane = required("[data-ruling-nav]");
   const frame = required("[data-reading-frame]");
   const readingEmpty = required("[data-reading-empty]");
   const phoneInboxButton = required("[data-phone-inbox]");
@@ -228,45 +271,43 @@
   const previousButton = required("[data-brief-previous]");
   const nextButton = required("[data-brief-next]");
   const expandLink = required("[data-brief-expand]");
-  const message = required("[data-docket-message]");
-  const axisList = required("[data-axis-list]");
-  const meterFill = required("[data-docket-meter-fill]");
-  const meterLabel = required("[data-docket-meter-label]");
-  const overallField = required("[data-overall-note]");
-  const overallTextarea = required("[data-overall-textarea]");
+  const navTitle = required("[data-nav-decision-title]");
+  const message = required("[data-nav-message]");
+  const partOutline = required("[data-part-outline]");
+  const meterFill = required("[data-nav-meter-fill]");
+  const meterLabel = required("[data-nav-meter-label]");
   const sendButton = required("[data-send-ruling]");
   const draftNote = required("[data-draft-note]");
   const ribbon = required("[data-ruling-ribbon]");
   const ribbonMessage = required("[data-ribbon-message]");
   const ribbonBody = required("[data-ribbon-body]");
-  const ribbonStepper = required("[data-ribbon-axis-stepper]");
-  const ribbonAxisLabel = required("[data-ribbon-axis-label]");
-  const ribbonAxisControls = required("[data-ribbon-axis-controls]");
-  const ribbonNoteToggle = required("[data-ribbon-note-toggle]");
-  const ribbonNotePanel = required("[data-ribbon-note-panel]");
-  const ribbonNoteTextarea = required("[data-ribbon-note]");
-  const ribbonNoteRequirement = required(
-    "[data-ribbon-note-requirement]",
-  );
+  const ribbonStepper = required("[data-ribbon-part-stepper]");
   const ribbonProgress = required("[data-ribbon-progress]");
   const ribbonSendButton = required("[data-ribbon-send]");
 
+  const captureByCard = new WeakMap();
+  const activePartByCard = new WeakMap();
   const state = {
     card: null,
-    manifest: null,
-    draft: null,
-    activeAxisId: null,
+    capture: null,
+    activePartId: null,
     loadSequence: 0,
     frameLoadedSequence: 0,
-    frameLoadHandler: null,
+    frameDocumentVouched: false,
+    expectingChromeLoad: false,
+    awaitingFirstCapture: false,
+    pendingDraft: null,
+    pendingCollect: null,
     submitting: false,
     filed: false,
     storageWarning: "",
-    ribbonNoteOpen: false,
-    pendingScrollAxis: null,
+    notice: "",
+    noticeKind: "",
+    pendingScrollPart: null,
     pendingScrollStartedAt: 0,
     pendingScrollTimer: null,
   };
+  let collectTokenSequence = 0;
 
   function allCards() {
     return Array.from(shell.querySelectorAll("[data-brief-name]"));
@@ -282,17 +323,13 @@
     return `/${encodeURIComponent(name)}`;
   }
 
-  function axesPath(name) {
-    return `/axes/${encodeURIComponent(name)}`;
-  }
-
   function draftKey(issue) {
     return `${DRAFT_PREFIX}${issue}`;
   }
 
   function showMessage(text, kind = "") {
     message.textContent = text;
-    message.className = "docket-message";
+    message.className = "ruling-nav-message";
     if (kind) message.classList.add(`is-${kind}`);
     ribbonMessage.textContent = text;
     ribbonMessage.className = "ribbon-message";
@@ -303,73 +340,55 @@
     if (state.pendingScrollTimer !== null) {
       window.clearTimeout(state.pendingScrollTimer);
     }
-    state.pendingScrollAxis = null;
+    state.pendingScrollPart = null;
     state.pendingScrollStartedAt = 0;
     state.pendingScrollTimer = null;
   }
 
-  function beginPendingScroll(axisId) {
+  function beginPendingScroll(partId) {
     clearPendingScroll();
     const startedAt = Date.now();
-    state.pendingScrollAxis = axisId;
+    state.pendingScrollPart = partId;
     state.pendingScrollStartedAt = startedAt;
     state.pendingScrollTimer = window.setTimeout(() => {
       if (
-        state.pendingScrollAxis === axisId &&
+        state.pendingScrollPart === partId &&
         state.pendingScrollStartedAt === startedAt
       ) {
-        state.pendingScrollAxis = null;
+        state.pendingScrollPart = null;
         state.pendingScrollStartedAt = 0;
         state.pendingScrollTimer = null;
       }
     }, PENDING_SCROLL_TIMEOUT_MS);
   }
 
-  function resetRibbon() {
+  function resetCompanion(text) {
+    clearPendingScroll();
+    state.capture = null;
+    state.activePartId = null;
+    state.storageWarning = "";
+    state.notice = "";
+    state.noticeKind = "";
+    partOutline.replaceChildren();
+    ribbonStepper.replaceChildren();
     ribbonBody.hidden = true;
     ribbon.removeAttribute("aria-busy");
-    ribbonStepper.replaceChildren();
-    ribbonAxisLabel.textContent = "";
-    ribbonAxisControls.replaceChildren();
-    ribbonNoteToggle.hidden = true;
-    ribbonNoteToggle.disabled = true;
-    ribbonNoteToggle.setAttribute("aria-expanded", "false");
-    ribbonNotePanel.hidden = true;
-    ribbonNoteTextarea.value = "";
-    ribbonNoteTextarea.required = false;
-    ribbonNoteTextarea.setAttribute("aria-invalid", "false");
-    ribbonNoteRequirement.hidden = true;
-    ribbonProgress.textContent = "0 of 0 ruled";
-    ribbonSendButton.disabled = true;
-    ribbonSendButton.classList.remove("is-filed");
-    ribbonSendButton.textContent = "SEND RULING";
-    ribbonSendButton.title = "Select a brief to begin a ruling";
-  }
-
-  function resetDocket(text) {
-    clearPendingScroll();
-    state.manifest = null;
-    state.draft = null;
-    state.activeAxisId = null;
-    state.submitting = false;
-    state.filed = false;
-    state.storageWarning = "";
-    state.ribbonNoteOpen = false;
-    axisList.replaceChildren();
     meterFill.style.width = "0%";
-    meterLabel.textContent = "0 of 0 ruled";
-    overallField.hidden = true;
-    overallTextarea.value = "";
-    overallTextarea.disabled = false;
+    meterLabel.textContent = "0 of 0 decided";
+    ribbonProgress.textContent = "0 of 0 decided";
+    sendButton.hidden = false;
     sendButton.disabled = true;
     sendButton.classList.remove("is-filed");
     sendButton.textContent = "SEND RULING";
+    sendButton.title = "Select a brief to begin a ruling";
+    ribbonSendButton.hidden = false;
+    ribbonSendButton.disabled = true;
+    ribbonSendButton.classList.remove("is-filed");
+    ribbonSendButton.textContent = "SEND RULING";
+    ribbonSendButton.title = sendButton.title;
     draftNote.textContent =
-      "draft persists on this device · engage every axis to send";
-    resetRibbon();
-    if (text === "Loading axis manifest…") {
-      ribbon.setAttribute("aria-busy", "true");
-    }
+      "draft persists on this device · decide every part to send";
+    navTitle.textContent = state.card?.dataset.briefTitle || "Select a brief";
     showMessage(text);
   }
 
@@ -383,6 +402,7 @@
     readingStatus.hidden = false;
     expandLink.href = briefPath(card.dataset.briefName || "");
     expandLink.setAttribute("aria-disabled", "false");
+    navTitle.textContent = title;
     updateNavigation();
   }
 
@@ -402,18 +422,16 @@
     nextButton.disabled = index < 0 || index >= cards.length - 1;
   }
 
-  function knownAxisIds() {
-    return state.manifest
-      ? state.manifest.axes.map((axis) => axis.id)
-      : [];
+  function knownPartIds() {
+    return state.capture ? state.capture.parts.map((part) => part.id) : [];
   }
 
-  function scrollBriefToAxis(axisId) {
+  function scrollBriefToPart(partId) {
     const target = frame.contentWindow;
     if (!target) return;
-    beginPendingScroll(axisId);
+    beginPendingScroll(partId);
     target.postMessage(
-      {source: CHROME_MESSAGE_SOURCE, type: "scroll-to", axis: axisId},
+      {source: CHROME_MESSAGE_SOURCE, type: "scroll-to", axis: partId},
       "*",
     );
   }
@@ -427,19 +445,89 @@
     );
   }
 
-  function setActiveAxis(axisId, {scrollBrief = false} = {}) {
-    if (!knownAxisIds().includes(axisId)) return;
-    if (state.card?.dataset.briefStatus === "archived") return;
-    if (state.activeAxisId === axisId) {
-      if (scrollBrief) scrollBriefToAxis(axisId);
-      return;
+  function restoreBriefDraft(form) {
+    const target = frame.contentWindow;
+    if (!target) return;
+    target.postMessage(
+      {source: CHROME_MESSAGE_SOURCE, type: "restore", form},
+      "*",
+    );
+  }
+
+  function newCollectToken() {
+    collectTokenSequence += 1;
+    const random =
+      typeof window.crypto?.randomUUID === "function"
+        ? window.crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    return `${random}:${collectTokenSequence}`;
+  }
+
+  function collectFreshRuling(card) {
+    const target = frame.contentWindow;
+    if (!target || !state.frameDocumentVouched) {
+      return Promise.reject(
+        new DefinitelyNotFiledError(
+          "The selected brief is not a chrome-vouched document; re-select it before sending.",
+        ),
+      );
     }
-    state.ribbonNoteOpen = false;
-    state.activeAxisId = axisId;
-    renderAxes();
-    renderRibbon();
-    updateCompleteness();
-    if (scrollBrief) scrollBriefToAxis(axisId);
+    if (state.pendingCollect) {
+      return Promise.reject(
+        new DefinitelyNotFiledError(
+          "A fresh ruling capture is already pending.",
+        ),
+      );
+    }
+
+    const token = newCollectToken();
+    return new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        if (state.pendingCollect?.token !== token) return;
+        state.pendingCollect = null;
+        reject(
+          new AmbiguousSubmissionError(
+            "Fresh ruling capture timed out; filing status is uncertain.",
+          ),
+        );
+      }, COLLECT_TIMEOUT_MS);
+      state.pendingCollect = {card, reject, resolve, timeoutId, token};
+      try {
+        target.postMessage(makeCollectMessage(token), "*");
+      } catch (error) {
+        window.clearTimeout(timeoutId);
+        state.pendingCollect = null;
+        const detail = error instanceof Error ? error.message : String(error);
+        reject(
+          new AmbiguousSubmissionError(
+            `Fresh ruling capture could not be requested: ${detail}`,
+          ),
+        );
+      }
+    });
+  }
+
+  function acceptFreshRuling(ruling) {
+    const pending = state.pendingCollect;
+    if (
+      !pending ||
+      pending.card !== state.card ||
+      !rulingMatchesPendingToken(ruling, pending.token)
+    ) {
+      return false;
+    }
+    window.clearTimeout(pending.timeoutId);
+    state.pendingCollect = null;
+    pending.resolve(ruling);
+    return true;
+  }
+
+  function setActivePart(partId, {scrollBrief = false} = {}) {
+    if (!knownPartIds().includes(partId)) return;
+    state.activePartId = partId;
+    if (state.card) activePartByCard.set(state.card, partId);
+    renderPartNavigation();
+    if (scrollBrief) scrollBriefToPart(partId);
   }
 
   function activateTab(name) {
@@ -453,94 +541,40 @@
     }
   }
 
-  function emptyDraft(manifest) {
-    const axes = Object.create(null);
-    for (const axis of manifest.axes) {
-      axes[axis.id] = {mode: null, choice: null, note: ""};
-    }
-    return {version: 1, issue: manifest.issue, axes, overall: ""};
-  }
-
-  function restoreDraft(manifest) {
-    const restored = emptyDraft(manifest);
-    const warnings = [];
+  function readDraft(issue) {
     let raw;
     try {
-      raw = localStorage.getItem(draftKey(manifest.issue));
+      raw = localStorage.getItem(draftKey(issue));
     } catch (error) {
       state.storageWarning = `Draft storage is unavailable: ${error.message}`;
-      return restored;
+      return null;
     }
     if (raw === null) {
       state.storageWarning = "";
-      return restored;
+      return null;
     }
-
-    let saved;
     try {
-      saved = JSON.parse(raw);
-    } catch (error) {
-      state.storageWarning =
-        `Saved draft for issue ${manifest.issue} is invalid JSON: ${error.message}`;
-      return restored;
-    }
-    if (
-      !saved ||
-      typeof saved !== "object" ||
-      saved.issue !== manifest.issue ||
-      !saved.axes ||
-      typeof saved.axes !== "object"
-    ) {
-      state.storageWarning =
-        `Saved draft for issue ${manifest.issue} does not match this manifest.`;
-      return restored;
-    }
-
-    for (const axis of manifest.axes) {
-      const candidate = Object.prototype.hasOwnProperty.call(saved.axes, axis.id)
-        ? saved.axes[axis.id]
-        : null;
-      if (!candidate || typeof candidate !== "object") continue;
-      const note = typeof candidate.note === "string" ? candidate.note : "";
-      if (candidate.mode === "choice") {
-        const validChoice = axis.options.some(
-          (option) => option.id === candidate.choice,
-        );
-        if (validChoice) {
-          restored.axes[axis.id] = {
-            mode: "choice",
-            choice: candidate.choice,
-            note,
-          };
-        } else {
-          warnings.push(`${axis.label} has a stale option`);
-        }
-      } else if (candidate.mode === "deferred") {
-        restored.axes[axis.id] = {mode: "deferred", choice: null, note};
-      } else if (candidate.mode === "discuss") {
-        restored.axes[axis.id] = {mode: "discuss", choice: null, note};
-      } else if (candidate.mode !== null && candidate.mode !== undefined) {
-        warnings.push(`${axis.label} has an unsupported saved state`);
+      const draft = JSON.parse(raw);
+      if (!isValidDraftRecord(draft)) {
+        throw new TypeError("saved draft is not a shape-aware v3 record");
       }
+      state.storageWarning = "";
+      return draft;
+    } catch (error) {
+      state.storageWarning = `Saved draft for issue ${issue} is invalid: ${error.message}`;
+      return null;
     }
-    if (typeof saved.overall === "string") restored.overall = saved.overall;
-    state.storageWarning = warnings.length
-      ? `Draft restored with warnings: ${warnings.join("; ")}.`
-      : "";
-    return restored;
   }
 
-  function saveDraft() {
-    if (!state.manifest || !state.draft || state.filed) return;
+  function saveDraft(issue, form) {
     try {
       localStorage.setItem(
-        draftKey(state.manifest.issue),
-        JSON.stringify(state.draft),
+        draftKey(issue),
+        JSON.stringify(makeDraftRecord(form)),
       );
+      state.storageWarning = "";
     } catch (error) {
       state.storageWarning = `Draft could not be saved: ${error.message}`;
-      showMessage(state.storageWarning, "error");
-      draftNote.textContent = "draft storage failed · this ruling is not persisted";
     }
   }
 
@@ -553,629 +587,299 @@
     }
   }
 
-  function validateManifest(manifest, card) {
-    if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-      throw new Error("axis manifest is not a JSON object");
-    }
-    if (manifest.contract !== "v2") {
-      throw new Error(`axis manifest contract is ${String(manifest.contract)}, not v2`);
-    }
-    if (typeof manifest.issue !== "string" || !manifest.issue.trim()) {
-      throw new Error("axis manifest has no issue token");
-    }
-    if (manifest.issue !== card.dataset.briefIssue) {
-      throw new Error(
-        `axis manifest issue ${manifest.issue} does not match inbox issue ${card.dataset.briefIssue}`,
-      );
-    }
-    if (!Array.isArray(manifest.axes) || manifest.axes.length === 0) {
-      throw new Error("axis manifest contains no axes");
-    }
-    const formKeys = new Map();
-    const claimFormKey = (key, owner) => {
-      if (formKeys.has(key)) {
-        throw new Error(
-          `axis manifest produces colliding form key ${key} for ${formKeys.get(key)} and ${owner}`,
-        );
-      }
-      formKeys.set(key, owner);
-    };
-    for (const axis of manifest.axes) {
-      if (
-        !axis ||
-        typeof axis.id !== "string" ||
-        typeof axis.label !== "string" ||
-        axis.select !== "one" ||
-        typeof axis.notes !== "boolean" ||
-        !Array.isArray(axis.options) ||
-        axis.options.length === 0
-      ) {
-        throw new Error("axis manifest contains an invalid single-select axis");
-      }
-      for (const option of axis.options) {
-        if (
-          !option ||
-          typeof option.id !== "string" ||
-          typeof option.label !== "string"
-        ) {
-          throw new Error(`axis ${axis.id} contains an invalid option`);
-        }
-        if (
-          option.id === DEFERRED_SENTINEL ||
-          option.id === DISCUSS_SENTINEL
-        ) {
-          throw new Error(
-            `axis ${axis.id} option ${option.id} collides with a universal docket escape`,
-          );
-        }
-      }
-      claimFormKey(axis.id, `axis ${axis.id}`);
-      // Discuss can add a note even when the ordinary axis does not expose one.
-      claimFormKey(`${axis.id}-notes`, `notes for axis ${axis.id}`);
-    }
-    if (manifest.overall_notes) claimFormKey("overall", "overall notes");
-  }
-
-  async function fetchManifest(name) {
-    const response = await fetch(axesPath(name), {
-      headers: {Accept: "application/json"},
-      credentials: "same-origin",
-    });
-    if (!response.ok) {
-      let detail = "";
-      try {
-        const problem = await response.json();
-        detail = typeof problem.detail === "string" ? `: ${problem.detail}` : "";
-      } catch (_error) {
-        detail = "";
-      }
-      throw new ResponseError(
-        `axis manifest request failed (${response.status})${detail}`,
-        response.status,
-      );
-    }
+  function discardMismatchedDraft(issue) {
     try {
-      return await response.json();
+      localStorage.removeItem(draftKey(issue));
+      return "";
     } catch (error) {
-      throw new Error(`axis manifest response is not valid JSON: ${error.message}`);
+      return `The saved draft no longer matches this brief, but could not be cleared: ${error.message}`;
     }
   }
 
-  async function selectBrief(card) {
-    if (state.card === card) return;
+  function selectBrief(card) {
+    if (state.card === card && state.frameDocumentVouched) return;
     showPhoneBrief();
-    const selection = ++state.loadSequence;
+    state.loadSequence += 1;
+    state.frameLoadedSequence = 0;
+    state.frameDocumentVouched = false;
+    state.expectingChromeLoad = true;
+    state.awaitingFirstCapture = false;
     state.card = card;
+    state.submitting = card.dataset.rulingSubmissionPending === "true";
+    state.filed =
+      card.dataset.briefStatus === "archived" ||
+      Boolean(card.dataset.rulingSubmissionUncertain);
     for (const candidate of allCards()) {
       candidate.setAttribute("aria-current", String(candidate === card));
     }
 
     setToolbar(card);
-    if (state.frameLoadHandler) {
-      frame.removeEventListener("load", state.frameLoadHandler);
+    resetCompanion("Loading brief capture…");
+    navTitle.textContent = card.dataset.briefTitle || "Untitled decision";
+    const cachedCapture = captureByCard.get(card) || null;
+    if (cachedCapture) {
+      state.capture = cachedCapture;
+      const remembered = activePartByCard.get(card);
+      state.activePartId = cachedCapture.parts.some(
+        (part) => part.id === remembered,
+      )
+        ? remembered
+        : cachedCapture.parts[0]?.id || null;
     }
-    const frameLoadHandler = () => {
-      if (state.frameLoadHandler === frameLoadHandler) {
-        state.frameLoadHandler = null;
-      }
-      if (selection !== state.loadSequence) return;
-      state.frameLoadedSequence = selection;
-      if (state.manifest) requestBriefInView();
-    };
-    state.frameLoadHandler = frameLoadHandler;
-    frame.addEventListener("load", frameLoadHandler, {once: true});
+    state.pendingDraft = readDraft(card.dataset.briefIssue || "");
+    renderCompanion();
+
     frame.src = briefPath(card.dataset.briefName || "");
     frame.hidden = false;
     readingEmpty.hidden = true;
-    resetDocket("Loading axis manifest…");
-
-    try {
-      const manifest = await fetchManifest(card.dataset.briefName || "");
-      if (selection !== state.loadSequence) return;
-      validateManifest(manifest, card);
-      state.manifest = manifest;
-      card.dataset.axisCount = String(manifest.axes.length);
-
-      if (card.dataset.briefStatus === "archived") {
-        state.draft = emptyDraft(manifest);
-        renderArchivedDocket(
-          manifest,
-          `Ruling ${card.dataset.rulingSequence || "filed"} already acknowledges this brief.`,
-          false,
-        );
-        requestBriefInView();
-        return;
-      }
-
-      state.draft = restoreDraft(manifest);
-      state.activeAxisId =
-        manifest.axes.find((axis) => !axisComplete(axis))?.id || manifest.axes[0].id;
-      state.filed = false;
-      renderDocket();
-      requestBriefInView();
-    } catch (error) {
-      if (selection !== state.loadSequence) return;
-      if (
-        card.dataset.briefStatus === "archived" &&
-        error instanceof ResponseError &&
-        error.status === 404
-      ) {
-        renderArchivedDocket(
-          null,
-          `Ruling ${card.dataset.rulingSequence || "filed"} is archived; this legacy brief has no v2 axis manifest.`,
-          false,
-        );
-        return;
-      }
-      resetDocket("");
-      showMessage(
-        `Could not load ${axesPath(card.dataset.briefName || "")}: ${error.message}`,
-        "error",
-      );
-      console.error(error);
-    }
-  }
-
-  function recordFor(axis) {
-    return draftRecord(state.draft, axis);
-  }
-
-  function axisComplete(axis) {
-    if (!state.draft) return false;
-    return axisCompleteForDraft(axis, state.draft);
-  }
-
-  function engagedCount() {
-    if (!state.manifest || !state.draft) return 0;
-    return state.manifest.axes.filter(axisComplete).length;
-  }
-
-  function displayChoice(axis, record) {
-    if (record.mode === "deferred") return "Defer";
-    if (record.mode === "discuss") return "Discuss — see notes";
-    if (record.mode === "choice") {
-      return (
-        axis.options.find((option) => option.id === record.choice)?.label ||
-        "Unknown option"
-      );
-    }
-    return "unruled — select to edit";
-  }
-
-  function activeAxis() {
-    if (!state.manifest) return null;
-    return (
-      state.manifest.axes.find((axis) => axis.id === state.activeAxisId) ||
-      state.manifest.axes[0] ||
-      null
-    );
-  }
-
-  function chooseRibbonState(axis, mode, choice = null) {
-    if (state.submitting || state.filed) return;
-    const record = recordFor(axis);
-    state.activeAxisId = axis.id;
-    record.mode = mode;
-    record.choice = mode === "choice" ? choice : null;
-    state.ribbonNoteOpen =
-      mode === "discuss" ? true : state.ribbonNoteOpen && axis.notes;
-    saveDraft();
-    renderAxes();
-    renderRibbon();
-    updateCompleteness();
-    if (mode === "discuss") {
-      requestAnimationFrame(() => ribbonNoteTextarea.focus());
-    }
-  }
-
-  function ribbonPill(axis, text, className, selected, mode, choice = null) {
-    const pill = make("button", `ribbon-option-pill ${className}`.trim(), text);
-    pill.type = "button";
-    pill.disabled = state.submitting || state.filed;
-    pill.classList.toggle("is-selected", selected);
-    pill.setAttribute("aria-pressed", String(selected));
-    pill.addEventListener("click", () => {
-      chooseRibbonState(axis, mode, choice);
-    });
-    return pill;
-  }
-
-  function renderRibbon() {
-    if (!state.manifest || !state.draft) {
-      ribbonBody.hidden = true;
-      return;
-    }
-    ribbon.removeAttribute("aria-busy");
-    ribbonBody.hidden = false;
-    ribbonStepper.replaceChildren();
-    for (const axis of state.manifest.axes) {
-      const complete = axisComplete(axis);
-      const inView = state.activeAxisId === axis.id;
-      const dot = make("button", "ribbon-axis-dot");
-      dot.type = "button";
-      dot.classList.add(
-        inView ? "is-active" : complete ? "is-ruled" : "is-unruled",
-      );
-      dot.setAttribute("aria-pressed", String(inView));
-      dot.setAttribute(
-        "aria-label",
-        `${axis.label}: ${inView ? "in view" : complete ? "ruled" : "unruled"}`,
-      );
-      dot.title = `${axis.label} — ${inView ? "in view" : complete ? "ruled" : "unruled"}`;
-      dot.addEventListener("click", () => {
-        setActiveAxis(axis.id, {scrollBrief: true});
-      });
-      ribbonStepper.append(dot);
-    }
-
-    const axis = activeAxis();
-    if (!axis) {
-      ribbonAxisLabel.textContent = "";
-      ribbonAxisControls.replaceChildren();
-      return;
-    }
-    const record = recordFor(axis);
-    ribbonAxisLabel.textContent = axis.label;
-    ribbonAxisControls.setAttribute("aria-label", `${axis.label} choices`);
-    ribbonAxisControls.replaceChildren();
-    for (const option of axis.options) {
-      ribbonAxisControls.append(
-        ribbonPill(
-          axis,
-          option.label,
-          "",
-          record.mode === "choice" && record.choice === option.id,
-          "choice",
-          option.id,
-        ),
-      );
-    }
-    ribbonAxisControls.append(
-      ribbonPill(
-        axis,
-        "Defer",
-        "is-defer",
-        record.mode === "deferred",
-        "deferred",
-      ),
-      ribbonPill(
-        axis,
-        "Discuss",
-        "is-discuss",
-        record.mode === "discuss",
-        "discuss",
-      ),
-    );
-
-    const noteAvailable = axis.notes || record.mode === "discuss";
-    if (!noteAvailable) state.ribbonNoteOpen = false;
-    ribbonNoteToggle.hidden = !noteAvailable;
-    ribbonNoteToggle.disabled = state.submitting || state.filed;
-    ribbonNoteToggle.setAttribute(
-      "aria-expanded",
-      String(noteAvailable && state.ribbonNoteOpen),
-    );
-    ribbonNoteToggle.setAttribute("aria-label", `Show note for ${axis.label}`);
-    ribbonNotePanel.hidden = !noteAvailable || !state.ribbonNoteOpen;
-    ribbonNoteTextarea.disabled = state.submitting || state.filed;
-    ribbonNoteTextarea.value = record.note;
-    ribbonNoteTextarea.placeholder =
-      record.mode === "discuss"
-        ? "Required: what needs discussion?"
-        : "Add a note for this axis…";
-    ribbonNoteTextarea.setAttribute("aria-label", `${axis.label} note`);
-    ribbonNoteTextarea.required = record.mode === "discuss";
-    const noteMissing = record.mode === "discuss" && !record.note.trim();
-    ribbonNoteTextarea.setAttribute("aria-invalid", String(noteMissing));
-    ribbonNoteRequirement.hidden = !noteMissing;
-  }
-
-  function renderArchivedRibbon(manifest) {
-    resetRibbon();
-    ribbonBody.hidden = false;
-    ribbonAxisLabel.textContent = "ARCHIVED RULING";
-    ribbonNoteToggle.hidden = true;
-    const total = manifest ? manifest.axes.length : 0;
-    if (manifest) {
-      for (const axis of manifest.axes) {
-        const dot = make("button", "ribbon-axis-dot is-ruled");
-        dot.type = "button";
-        dot.disabled = true;
-        dot.setAttribute("aria-label", `${axis.label}: ruled`);
-        dot.title = `${axis.label} — ruled`;
-        ribbonStepper.append(dot);
-      }
-    }
-    ribbonProgress.textContent = total
-      ? `${total} of ${total} ruled`
-      : "ruling filed";
-    ribbonSendButton.disabled = true;
-    ribbonSendButton.classList.add("is-filed");
-    ribbonSendButton.textContent = "FILED";
-    ribbonSendButton.title = "This brief already has a ruling";
-  }
-
-  function renderDocket() {
-    if (!state.manifest || !state.draft) return;
-    const pending = state.card?.dataset.rulingSubmissionPending === "true";
-    const uncertain = state.card?.dataset.rulingSubmissionUncertain || "";
-    const rejected = state.card?.dataset.rulingSubmissionError || "";
-    if (uncertain) {
-      state.filed = true;
-      state.submitting = false;
-    } else if (pending) {
-      state.submitting = true;
-    }
-    overallField.hidden = !state.manifest.overall_notes;
-    overallTextarea.value = state.draft.overall;
-    sendButton.classList.remove("is-filed");
-    sendButton.textContent = "SEND RULING";
-    draftNote.textContent =
-      "draft persists on this device · engage every axis to send";
-    if (uncertain) {
-      showMessage(
-        `Ruling submission status is UNCERTAIN: ${uncertain}. Reload and check the Archive before resubmitting.`,
-        "error",
-      );
-    } else if (rejected) {
-      showMessage(`Ruling was not filed: ${rejected}`, "error");
-    } else if (pending) {
-      showMessage("Filing one ruling for this brief…");
-    } else if (state.storageWarning) {
-      showMessage(state.storageWarning, "error");
-    } else {
-      showMessage("");
-    }
-    renderAxes();
-    renderRibbon();
-    updateCompleteness();
-  }
-
-  function renderAxes() {
-    axisList.replaceChildren();
-    for (const axis of state.manifest.axes) {
-      axisList.append(renderAxis(axis));
-    }
-  }
-
-  function renderAxis(axis) {
-    const record = recordFor(axis);
-    const complete = axisComplete(axis);
-    const editing = state.activeAxisId === axis.id && !state.filed;
-    const card = make("article", "axis-card");
-    card.dataset.axisId = axis.id;
-    card.classList.add(
-      editing ? "is-editing" : complete ? "is-ruled" : "is-unruled",
-    );
-
-    const heading = make("button", "axis-heading");
-    heading.type = "button";
-    heading.setAttribute("aria-expanded", String(editing));
-    const titleRow = make("span", "axis-title-row");
-    if (complete && !editing) {
-      titleRow.append(make("span", "axis-check", "✓"));
-    }
-    titleRow.append(make("span", "axis-label", axis.label));
-    if (editing) {
-      titleRow.append(make("span", "in-view-tag", "IN VIEW"));
-    }
-    heading.append(titleRow);
-
-    if (!editing) {
-      const summary = make("span", "axis-summary", displayChoice(axis, record));
-      if (!complete) summary.classList.add("is-muted");
-      if (record.note.trim()) {
-        summary.append(make("span", "note-count", " · 1 note"));
-      }
-      heading.append(summary);
-    }
-    heading.addEventListener("click", () => {
-      setActiveAxis(axis.id);
-    });
-    card.append(heading);
-
-    if (editing) {
-      const controls = make("div", "axis-controls");
-      const pills = make("div", "option-pills");
-      pills.setAttribute("role", "group");
-      pills.setAttribute("aria-label", `${axis.label} choices`);
-
-      for (const option of axis.options) {
-        const pill = make("button", "option-pill", option.label);
-        pill.type = "button";
-        const selected =
-          record.mode === "choice" && record.choice === option.id;
-        pill.classList.toggle("is-selected", selected);
-        pill.setAttribute("aria-pressed", String(selected));
-        pill.addEventListener("click", () => {
-          record.mode = "choice";
-          record.choice = option.id;
-          state.ribbonNoteOpen = state.ribbonNoteOpen && axis.notes;
-          saveDraft();
-          renderAxes();
-          renderRibbon();
-          updateCompleteness();
-        });
-        pills.append(pill);
-      }
-
-      const defer = make("button", "option-pill", "Defer");
-      defer.type = "button";
-      defer.classList.toggle("is-selected", record.mode === "deferred");
-      defer.setAttribute("aria-pressed", String(record.mode === "deferred"));
-      defer.addEventListener("click", () => {
-        record.mode = "deferred";
-        record.choice = null;
-        state.ribbonNoteOpen = state.ribbonNoteOpen && axis.notes;
-        saveDraft();
-        renderAxes();
-        renderRibbon();
-        updateCompleteness();
-      });
-      pills.append(defer);
-
-      const discuss = make("button", "option-pill is-discuss", "Discuss");
-      discuss.type = "button";
-      discuss.classList.toggle("is-selected", record.mode === "discuss");
-      discuss.setAttribute("aria-pressed", String(record.mode === "discuss"));
-      discuss.addEventListener("click", () => {
-        record.mode = "discuss";
-        record.choice = null;
-        state.ribbonNoteOpen = true;
-        saveDraft();
-        renderAxes();
-        renderRibbon();
-        updateCompleteness();
-        requestAnimationFrame(() => {
-          axisList
-            .querySelector(`[data-axis-id="${CSS.escape(axis.id)}"] textarea`)
-            ?.focus();
-        });
-      });
-      pills.append(discuss);
-      controls.append(pills);
-
-      if (axis.notes || record.mode === "discuss") {
-        const note = make("textarea", "axis-note");
-        note.rows = 3;
-        note.value = record.note;
-        note.placeholder =
-          record.mode === "discuss"
-            ? "Required: what needs discussion?"
-            : "Add a note for this axis…";
-        note.setAttribute("aria-label", `${axis.label} note`);
-        note.required = record.mode === "discuss";
-        note.setAttribute(
-          "aria-invalid",
-          String(record.mode === "discuss" && !record.note.trim()),
-        );
-        const requirement = make(
-          "p",
-          "discuss-requirement",
-          "Discuss requires a note before this axis is complete.",
-        );
-        requirement.hidden =
-          record.mode !== "discuss" || Boolean(record.note.trim());
-        note.addEventListener("input", () => {
-          record.note = note.value;
-          const missing = record.mode === "discuss" && !record.note.trim();
-          note.setAttribute("aria-invalid", String(missing));
-          requirement.hidden = !missing;
-          saveDraft();
-          renderRibbon();
-          updateCompleteness();
-        });
-        controls.append(note, requirement);
-      }
-      card.append(controls);
-    }
-    return card;
   }
 
   function updateCardProgress(count, total) {
     if (!state.card) return;
-    state.card.dataset.axisCount = String(total);
+    state.card.dataset.partCount = String(total);
     const fill = state.card.querySelector(".brief-progress-track > span");
     const label = state.card.querySelector(".brief-progress-label");
     if (fill) fill.style.width = `${total ? (count / total) * 100 : 0}%`;
-    if (label) label.textContent = `${count}/${total} axes`;
+    if (label) label.textContent = `${count}/${total} parts`;
   }
 
-  function updateCompleteness() {
-    if (!state.manifest || !state.draft) return;
-    const total = state.manifest.axes.length;
-    const count = engagedCount();
-    const uncertain = Boolean(
-      state.card?.dataset.rulingSubmissionUncertain,
-    );
-    meterFill.style.width = `${(count / total) * 100}%`;
-    meterLabel.textContent = `${count} of ${total} ruled`;
-    ribbonProgress.textContent = `${count} of ${total} ruled`;
+  function renderOutline() {
+    partOutline.replaceChildren();
+    if (!state.capture) return;
+    for (const part of state.capture.parts) {
+      const item = make("li", "ruling-nav-item");
+      const button = make("button", "ruling-nav-link");
+      button.type = "button";
+      button.dataset.partId = part.id;
+      button.classList.toggle("is-active", state.activePartId === part.id);
+      button.classList.toggle("is-answered", part.answered);
+      button.setAttribute(
+        "aria-current",
+        state.activePartId === part.id ? "true" : "false",
+      );
+      const glyph = make(
+        "span",
+        "ruling-nav-glyph",
+        part.answered ? "✓" : "○",
+      );
+      glyph.setAttribute("aria-hidden", "true");
+      button.append(glyph, make("span", "ruling-nav-label", part.label || part.id));
+      button.addEventListener("click", () => {
+        setActivePart(part.id, {scrollBrief: true});
+      });
+      item.append(button);
+      partOutline.append(item);
+    }
+  }
+
+  function renderRibbonParts() {
+    ribbonStepper.replaceChildren();
+    if (!state.capture) return;
+    for (const part of state.capture.parts) {
+      const active = state.activePartId === part.id;
+      const dot = make("button", "ribbon-part-dot");
+      dot.type = "button";
+      dot.classList.add(
+        active ? "is-active" : part.answered ? "is-answered" : "is-unanswered",
+      );
+      dot.setAttribute("aria-pressed", String(active));
+      dot.setAttribute(
+        "aria-label",
+        `${part.label || part.id}: ${active ? "in view" : part.answered ? "decided" : "undecided"}`,
+      );
+      dot.title = `${part.label || part.id} — ${active ? "in view" : part.answered ? "decided" : "undecided"}`;
+      dot.addEventListener("click", () => {
+        setActivePart(part.id, {scrollBrief: true});
+      });
+      ribbonStepper.append(dot);
+    }
+  }
+
+  function renderPartNavigation() {
+    renderOutline();
+    renderRibbonParts();
+  }
+
+  function renderCompanion() {
+    const card = state.card;
+    if (!card) return;
+    const capture = state.capture;
+    const total = capture?.parts.length || 0;
+    const count = capture
+      ? capture.parts.filter((part) => part.answered).length
+      : 0;
+    const archived = card.dataset.briefStatus === "archived";
+    const pending =
+      state.submitting || card.dataset.rulingSubmissionPending === "true";
+    const uncertain = card.dataset.rulingSubmissionUncertain || "";
+    const rejected = card.dataset.rulingSubmissionError || "";
+    const complete = Boolean(capture?.allAnswered) && state.frameDocumentVouched;
+
+    navTitle.textContent = card.dataset.briefTitle || "Untitled decision";
+    meterFill.style.width = `${total ? (count / total) * 100 : 0}%`;
+    meterLabel.textContent = `${count} of ${total} decided`;
+    ribbonProgress.textContent = `${count} of ${total} decided`;
+    ribbonBody.hidden = !capture;
+    renderPartNavigation();
     updateCardProgress(count, total);
-    const incomplete = total - count;
-    sendButton.disabled =
-      incomplete !== 0 || state.submitting || state.filed || uncertain;
-    ribbonSendButton.disabled = sendButton.disabled;
-    const captureLocked = state.submitting || state.filed;
-    for (const control of axisList.querySelectorAll(".option-pill, .axis-note")) {
-      control.disabled = captureLocked;
-    }
-    overallTextarea.disabled = captureLocked;
-    for (const control of ribbonAxisControls.querySelectorAll("button")) {
-      control.disabled = captureLocked;
-    }
-    ribbonNoteTextarea.disabled = captureLocked;
-    ribbonNoteToggle.disabled = captureLocked;
+
+    sendButton.hidden = archived;
+    ribbonSendButton.hidden = archived;
+    const canSend = complete && !pending && !uncertain && !archived;
+    sendButton.disabled = !canSend;
+    ribbonSendButton.disabled = !canSend;
+    sendButton.classList.toggle("is-filed", archived);
+    ribbonSendButton.classList.toggle("is-filed", archived);
     ribbon.removeAttribute("aria-busy");
+
+    if (archived) {
+      sendButton.textContent = "RULING FILED";
+      ribbonSendButton.textContent = "FILED";
+      draftNote.textContent = "one ruling per brief · no archived re-filing";
+      showMessage(
+        state.notice ||
+          `Ruling ${card.dataset.rulingSequence || "filed"} already acknowledges this brief.`,
+        state.noticeKind || "acknowledged",
+      );
+      return;
+    }
     if (uncertain) {
       sendButton.textContent = "STATUS UNCERTAIN";
       sendButton.title = "Reload and check the Archive before resubmitting";
       ribbonSendButton.textContent = "UNCERTAIN";
-      ribbonSendButton.title =
-        "Reload and check the Archive before resubmitting";
+      ribbonSendButton.title = sendButton.title;
       draftNote.textContent = "reload · check archive before any resubmission";
-    } else if (state.submitting) {
+      showMessage(
+        `Ruling submission status is UNCERTAIN: ${uncertain}. Reload and check the Archive before resubmitting.`,
+        "error",
+      );
+      return;
+    }
+    if (pending) {
       sendButton.textContent = "FILING…";
       sendButton.title = "Ruling submission is in progress";
-      ribbon.setAttribute("aria-busy", "true");
       ribbonSendButton.textContent = "FILING…";
-      ribbonSendButton.title = "Ruling submission is in progress";
-    } else {
-      sendButton.textContent = "SEND RULING";
-      sendButton.title = incomplete
-        ? `${incomplete} ${incomplete === 1 ? "axis is" : "axes are"} incomplete`
-        : "File one ruling for this brief";
-      ribbonSendButton.textContent = "SEND RULING";
       ribbonSendButton.title = sendButton.title;
+      ribbon.setAttribute("aria-busy", "true");
+      showMessage("Filing one ruling for this brief…");
+      return;
+    }
+
+    sendButton.textContent = "SEND RULING";
+    ribbonSendButton.textContent = "SEND RULING";
+    const incomplete = total - count;
+    sendButton.title = !state.frameDocumentVouched
+      ? "Waiting for the chrome-loaded brief document"
+      : !capture
+      ? "Waiting for the brief to report its capture state"
+      : incomplete
+        ? `${incomplete} decision ${incomplete === 1 ? "part is" : "parts are"} incomplete`
+        : "File one ruling for this brief";
+    ribbonSendButton.title = sendButton.title;
+    draftNote.textContent = state.storageWarning
+      ? "draft storage failed · this ruling is not persisted"
+      : "draft persists on this device · decide every part to send";
+    if (rejected) {
+      showMessage(`Ruling was not filed: ${rejected}`, "error");
+    } else if (state.storageWarning) {
+      showMessage(state.storageWarning, "error");
+    } else if (state.notice) {
+      showMessage(state.notice, state.noticeKind);
+    } else if (!state.frameDocumentVouched || !capture) {
+      showMessage("Loading brief capture…");
+    } else {
+      showMessage("");
     }
   }
 
-  function renderArchivedDocket(manifest, detail, useCurrentChoices) {
-    state.filed = true;
-    state.submitting = false;
-    state.activeAxisId = null;
-    overallField.hidden = true;
-    axisList.replaceChildren();
-    const total = manifest ? manifest.axes.length : 0;
-    meterFill.style.width = total ? "100%" : "0%";
-    meterLabel.textContent = total ? `${total} of ${total} ruled` : "ruling filed";
-    showMessage(detail, "acknowledged");
+  function acceptCapture(capture) {
+    const card = state.card;
+    if (!card) return;
+    const expectedIssue = card.dataset.briefIssue || "";
+    if (!capture.issue || capture.issue !== expectedIssue) {
+      state.capture = null;
+      partOutline.replaceChildren();
+      ribbonStepper.replaceChildren();
+      sendButton.disabled = true;
+      ribbonSendButton.disabled = true;
+      showMessage(
+        `Brief capture issue ${capture.issue || "(empty)"} does not match inbox issue ${expectedIssue || "(empty)"}.`,
+        "error",
+      );
+      return;
+    }
 
-    if (manifest) {
-      for (const axis of manifest.axes) {
-        const card = make("article", "axis-card is-ruled is-archived");
-        const heading = make("div", "axis-heading");
-        const row = make("span", "axis-title-row");
-        row.append(
-          make("span", "axis-check", "✓"),
-          make("span", "axis-label", axis.label),
-        );
-        heading.append(row);
-        const record = state.draft?.axes?.[axis.id];
-        const summaryText =
-          useCurrentChoices && record
-            ? displayChoice(axis, record)
-            : `Filed in ruling ${state.card?.dataset.rulingSequence || "archive"}`;
-        const summary = make("span", "axis-summary", summaryText);
-        if (useCurrentChoices && record?.note?.trim()) {
-          summary.append(make("span", "note-count", " · 1 note"));
-        }
-        heading.append(summary);
-        card.append(heading);
-        axisList.append(card);
+    const firstCapture = state.capture === null;
+    const firstDocumentCapture = state.awaitingFirstCapture;
+    let draftToRestore = null;
+    let shouldSaveDraft = true;
+    if (firstDocumentCapture) {
+      state.awaitingFirstCapture = false;
+      const savedDraft = state.pendingDraft;
+      state.pendingDraft = null;
+      if (savedDraft && draftMatchesForm(savedDraft, capture.form)) {
+        draftToRestore = savedDraft.form;
+        shouldSaveDraft = false;
+      } else if (savedDraft) {
+        const warning = discardMismatchedDraft(capture.issue);
+        state.storageWarning = warning;
+        state.notice = warning ||
+          "The saved draft was discarded because this brief's form shape changed.";
+        state.noticeKind = warning ? "error" : "";
       }
     }
-
-    sendButton.disabled = true;
-    sendButton.classList.add("is-filed");
-    sendButton.textContent = "RULING FILED";
-    sendButton.title = "This brief already has a ruling";
-    draftNote.textContent = "one ruling per brief · draft cleared after filing";
-    renderArchivedRibbon(manifest);
+    state.capture = capture;
+    captureByCard.set(card, capture);
+    const remembered = activePartByCard.get(card);
+    if (!capture.parts.some((part) => part.id === state.activePartId)) {
+      state.activePartId = capture.parts.some((part) => part.id === remembered)
+        ? remembered
+        : capture.parts[0]?.id || null;
+    }
+    if (state.activePartId) activePartByCard.set(card, state.activePartId);
+    if (
+      shouldSaveDraft &&
+      card.dataset.briefStatus === "awaiting" &&
+      !card.dataset.rulingSubmissionUncertain
+    ) {
+      saveDraft(capture.issue, capture.form);
+    }
+    renderCompanion();
+    if (draftToRestore) restoreBriefDraft(draftToRestore);
+    if (firstCapture) requestBriefInView();
   }
 
-  function composeRuling() {
-    return composeRulingPayload(state.manifest, state.draft);
+  function invalidateForeignFrameDocument() {
+    const card = state.card;
+    state.expectingChromeLoad = false;
+    state.frameDocumentVouched = false;
+    state.frameLoadedSequence = 0;
+    state.awaitingFirstCapture = false;
+    state.pendingDraft = null;
+    state.capture = null;
+    state.activePartId = null;
+    clearPendingScroll();
+    if (card) {
+      captureByCard.delete(card);
+      activePartByCard.delete(card);
+      updateCardProgress(0, 0);
+    }
+    state.notice =
+      "The brief navigated away from the chrome-loaded document. Re-select it to reload capture safely.";
+    state.noticeKind = "error";
+    renderCompanion();
+  }
+
+  function handleFrameLoad() {
+    if (state.expectingChromeLoad) {
+      state.expectingChromeLoad = false;
+      state.frameLoadedSequence = state.loadSequence;
+      state.frameDocumentVouched = true;
+      state.awaitingFirstCapture = true;
+      requestBriefInView();
+      return;
+    }
+    if (state.card) invalidateForeignFrameDocument();
   }
 
   function setListCount(name, value) {
@@ -1233,66 +937,82 @@
 
   async function fileRuling() {
     if (state.submitting || state.filed) return;
-    let payload;
-    try {
-      payload = composeRuling();
-    } catch (error) {
-      showMessage(`Ruling is not ready: ${error.message}`, "error");
+    const capture = state.capture;
+    const submittedCard = state.card;
+    if (
+      !capture ||
+      !capture.allAnswered ||
+      !submittedCard ||
+      !state.frameDocumentVouched
+    ) {
+      showMessage("Ruling is not ready: every decision part must be answered.", "error");
       return;
     }
-
-    const submittedCard = state.card;
-    const submittedManifest = state.manifest;
-    const submittedDraft = state.draft;
-    const submittedIssue = payload.issue;
-    if (!submittedCard || !submittedManifest || !submittedDraft) {
+    if (capture.issue !== submittedCard.dataset.briefIssue) {
       showMessage(
-        "Ruling is not ready: the submitted card lost its loaded docket state",
+        "Ruling is not ready: the brief reported a mismatched issue.",
         "error",
       );
       return;
     }
 
+    const submittedIssue = submittedCard.dataset.briefIssue || "";
     delete submittedCard.dataset.rulingSubmissionError;
     delete submittedCard.dataset.rulingSubmissionUncertain;
     submittedCard.dataset.rulingSubmissionPending = "true";
     state.submitting = true;
-    updateCompleteness();
-    showMessage("Filing one ruling for this brief…");
+    renderCompanion();
+
     let acknowledgement;
+    let submittedCapture;
     try {
+      const ruling = await collectFreshRuling(submittedCard);
+      if (!ruling.allAnswered) {
+        throw new DefinitelyNotFiledError(
+          "The fresh ruling is incomplete; every decision part must be answered.",
+        );
+      }
+      if (!ruling.markdown.trim()) {
+        throw new DefinitelyNotFiledError(
+          "The fresh ruling has empty markdown and was not filed.",
+        );
+      }
+      const payload = {
+        issue: submittedIssue,
+        markdown: ruling.markdown,
+        form: ruling.form,
+      };
+      submittedCapture = {
+        ...capture,
+        allAnswered: ruling.allAnswered,
+        form: ruling.form,
+        markdown: ruling.markdown,
+      };
       const response = await fetch("/ruling", {
         method: "POST",
         headers: {"Content-Type": "application/json", Accept: "application/json"},
         credentials: "same-origin",
         body: JSON.stringify(payload),
       });
-      acknowledgement = await readRulingAcknowledgement(
-        response,
-        submittedIssue,
-      );
+      acknowledgement = await readRulingAcknowledgement(response, submittedIssue);
     } catch (error) {
       delete submittedCard.dataset.rulingSubmissionPending;
       const stillSelected = state.card === submittedCard;
+      const detail = error instanceof Error ? error.message : String(error);
       if (submissionFailureKind(error) === "definitely-not-filed") {
-        submittedCard.dataset.rulingSubmissionError = error.message;
+        submittedCard.dataset.rulingSubmissionError = detail;
         if (stillSelected) {
           state.submitting = false;
           state.filed = false;
-          showMessage(`Ruling was not filed: ${error.message}`, "error");
-          updateCompleteness();
+          renderCompanion();
         }
       } else {
-        submittedCard.dataset.rulingSubmissionUncertain = error.message;
+        submittedCard.dataset.rulingSubmissionUncertain = detail;
         delete submittedCard.dataset.rulingSubmissionError;
         if (stillSelected) {
           state.submitting = false;
           state.filed = true;
-          showMessage(
-            `Ruling submission status is UNCERTAIN: ${error.message}. Reload and check the Archive before resubmitting.`,
-            "error",
-          );
-          updateCompleteness();
+          renderCompanion();
         }
       }
       console.error(error);
@@ -1304,17 +1024,16 @@
     delete submittedCard.dataset.rulingSubmissionUncertain;
     const stillSelected = state.card === submittedCard;
     const clearWarning = clearDraft(submittedIssue);
+    captureByCard.set(submittedCard, submittedCapture);
     archiveCurrentCard(submittedCard, acknowledgement, stillSelected);
     if (stillSelected) {
-      state.manifest = submittedManifest;
-      state.draft = submittedDraft;
+      state.capture = submittedCapture;
       state.filed = true;
       state.submitting = false;
-      renderArchivedDocket(
-        submittedManifest,
-        `Ruling ${acknowledgement.sequence || "filed"} was filed and this brief is now archived.${clearWarning}`,
-        true,
-      );
+      state.notice =
+        `Ruling ${acknowledgement.sequence || "filed"} was filed and this brief is now archived.${clearWarning}`;
+      state.noticeKind = "acknowledged";
+      renderCompanion();
     } else if (clearWarning) {
       console.error(clearWarning.trim());
     }
@@ -1322,9 +1041,9 @@
 
   function resizeFromKeyboard(resizer, direction) {
     const isList = resizer.dataset.resizer === "list";
-    const target = isList ? listPane : docketPane;
-    const minimum = isList ? LIST_MIN : DOCKET_MIN;
-    const maximum = isList ? LIST_MAX : DOCKET_MAX;
+    const target = isList ? listPane : navPane;
+    const minimum = isList ? LIST_MIN : NAV_MIN;
+    const maximum = isList ? LIST_MAX : NAV_MAX;
     const current = target.getBoundingClientRect().width;
     let next = current;
     if (direction === "minimum") next = minimum;
@@ -1333,7 +1052,7 @@
     if (direction === "increase") next = current + 10;
     next = clamp(next, minimum, maximum);
     shell.style.setProperty(
-      isList ? "--list-width" : "--docket-width",
+      isList ? "--list-width" : "--nav-width",
       `${next}px`,
     );
     resizer.setAttribute("aria-valuenow", String(Math.round(next)));
@@ -1341,9 +1060,9 @@
 
   function wireResizer(resizer) {
     const isList = resizer.dataset.resizer === "list";
-    const target = isList ? listPane : docketPane;
-    const minimum = isList ? LIST_MIN : DOCKET_MIN;
-    const maximum = isList ? LIST_MAX : DOCKET_MAX;
+    const target = isList ? listPane : navPane;
+    const minimum = isList ? LIST_MIN : NAV_MIN;
+    const maximum = isList ? LIST_MAX : NAV_MAX;
 
     resizer.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
@@ -1362,7 +1081,7 @@
           maximum,
         );
         shell.style.setProperty(
-          isList ? "--list-width" : "--docket-width",
+          isList ? "--list-width" : "--nav-width",
           `${width}px`,
         );
         resizer.setAttribute("aria-valuenow", String(Math.round(width)));
@@ -1404,7 +1123,7 @@
   for (const card of allCards()) {
     card.addEventListener("click", () => {
       showPhoneBrief();
-      void selectBrief(card);
+      selectBrief(card);
     });
   }
   for (const resizer of shell.querySelectorAll("[data-resizer]")) {
@@ -1414,13 +1133,13 @@
   previousButton.addEventListener("click", () => {
     const cards = pendingCards();
     const index = cards.indexOf(state.card);
-    if (index > 0) void selectBrief(cards[index - 1]);
+    if (index > 0) selectBrief(cards[index - 1]);
   });
   nextButton.addEventListener("click", () => {
     const cards = pendingCards();
     const index = cards.indexOf(state.card);
     if (index >= 0 && index < cards.length - 1) {
-      void selectBrief(cards[index + 1]);
+      selectBrief(cards[index + 1]);
     }
   });
   expandLink.addEventListener("click", (event) => {
@@ -1429,51 +1148,39 @@
     }
   });
   phoneInboxButton.addEventListener("click", showPhoneInbox);
-  ribbonNoteToggle.addEventListener("click", () => {
-    const axis = activeAxis();
-    if (!axis) return;
-    const record = recordFor(axis);
-    if (!axis.notes && record.mode !== "discuss") return;
-    state.ribbonNoteOpen = !state.ribbonNoteOpen;
-    renderRibbon();
-    if (state.ribbonNoteOpen) {
-      requestAnimationFrame(() => ribbonNoteTextarea.focus());
-    }
-  });
-  ribbonNoteTextarea.addEventListener("input", () => {
-    const axis = activeAxis();
-    if (!axis || !state.draft || state.submitting || state.filed) return;
-    const record = recordFor(axis);
-    record.note = ribbonNoteTextarea.value;
-    const missing = record.mode === "discuss" && !record.note.trim();
-    ribbonNoteTextarea.setAttribute("aria-invalid", String(missing));
-    ribbonNoteRequirement.hidden = !missing;
-    saveDraft();
-    renderAxes();
-    updateCompleteness();
-  });
-  overallTextarea.addEventListener("input", () => {
-    if (!state.draft || state.submitting || state.filed) return;
-    state.draft.overall = overallTextarea.value;
-    saveDraft();
-  });
   sendButton.addEventListener("click", () => void fileRuling());
   ribbonSendButton.addEventListener("click", () => void fileRuling());
+  frame.addEventListener("load", handleFrameLoad);
   window.addEventListener("message", (event) => {
     // contentWindow is a persistent WindowProxy across iframe navigations.
     if (event.source !== frame.contentWindow) return;
-    if (state.frameLoadedSequence !== state.loadSequence) return;
-    if (!isValidBriefInViewMessage(event.data, knownAxisIds())) return;
     if (
-      !shouldAcceptInViewReport(
-        state.pendingScrollAxis,
-        event.data.axis,
+      !isMessageFromCurrentBrief(
+        event.source,
+        frame.contentWindow,
+        state.frameDocumentVouched,
+        state.frameLoadedSequence,
+        state.loadSequence,
       )
     ) {
       return;
     }
-    if (state.pendingScrollAxis === event.data.axis) clearPendingScroll();
-    setActiveAxis(event.data.axis);
+    if (isValidBriefRulingMessage(event.data)) {
+      acceptFreshRuling(event.data);
+      return;
+    }
+    if (isValidBriefCaptureMessage(event.data)) {
+      acceptCapture(event.data);
+      return;
+    }
+    if (!isValidBriefInViewMessage(event.data, knownPartIds())) return;
+    if (
+      !shouldAcceptInViewReport(state.pendingScrollPart, event.data.axis)
+    ) {
+      return;
+    }
+    if (state.pendingScrollPart === event.data.axis) clearPendingScroll();
+    setActivePart(event.data.axis);
   });
 
   updateNavigation();
@@ -1482,6 +1189,6 @@
     typeof window.matchMedia === "function" &&
     window.matchMedia("(max-width: 760px)").matches;
   if (initial && !startsOnPhone) {
-    void selectBrief(initial);
+    selectBrief(initial);
   }
-})()
+})();

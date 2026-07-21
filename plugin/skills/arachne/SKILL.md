@@ -51,12 +51,16 @@ losing one is not. Never hand-edit it otherwise.
 1. **Author** a self-contained `decision_<slug>.html` per the page contract
    below.
 2. **Publish** with `publish_decision(name, html, issue)`, where `issue` is
-   the same token the page's `/ruling` POST will carry — recording it is what
-   lets the inbox archive the brief the moment its ruling is filed.
-   Validation is server-side (relative `/ruling` endpoint, `localStorage`
-   persistence, name allowlist `[A-Za-z0-9][A-Za-z0-9._-]*\.html`); it
-   rewrites absolute loopback endpoints and publishes atomically. Returns the
-   public page URL.
+   the same token as the brief's `data-issue` — recording it is what lets the
+   inbox archive the brief the moment its ruling is filed. Validation is
+   server-side: the name must match
+   `[A-Za-z0-9][A-Za-z0-9._-]*\.html`, legacy capture references are rejected,
+   and publication is atomic. The tool returns the public page URL. From a
+   checkout, the equivalent producer path is:
+
+   ```bash
+   bin/publish-page.py decision_<slug>.html --pages-dir /path/to/arachne/pages
+   ```
 3. **Point at the inbox** — the human's devices hold a fifteen-day sliding
    session and a bookmark to the stable inbox at `/`, where the new brief is
    already listed. Default to saying the brief is **in their Arachne inbox**
@@ -82,20 +86,57 @@ losing one is not. Never hand-edit it otherwise.
 
 ## Page Contract
 
-- **Self-contained.** Inline `<style>`/`<script>` only; the server applies a
-  strict CSP (no external hosts; `data:`/`blob:` allowed for assets).
-- **Submit to the relative endpoint:**
+The current v2 model is **argument plus brief-owned capture, with chrome-owned
+filing**:
 
-  ```js
-  fetch('/ruling', { method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ issue, markdown, form }) })
-  ```
+- Make the brief self-contained. Inline all CSS, assets, and scripts; the page
+  runs in an opaque `sandbox="allow-scripts"` iframe.
+- Put the ruling controls in the brief's own `<form>`. Any named `input`,
+  `select`, or `textarea` controls are allowed.
+- Wrap every independently required decision part in an element with
+  `data-decision="<stable-id>"`. `data-label="Human label"` is optional; without
+  it the agent derives a label from the part's heading/text.
+- Put the issue token on `<html data-issue="…">` or `<body data-issue="…">`.
+- Immediately before `</body>`, add an inline
+  `<script data-arachne-brief-agent>` whose body is the **verbatim, complete
+  contents** of `ui/brief-agent.js`. Do not rewrite or externally load it.
+- A v2 brief MUST NOT contain `/ruling` or `localStorage`. The application
+  chrome owns draft persistence, requests a fresh capture on Send, and mediates
+  the POST.
 
-  `issue`: short id string; `markdown`: human-readable record of the choice;
-  `form`: the structured answer object.
-- **Persist in-progress state to `localStorage`** so a phone can resume
-  mid-answer.
-- On success show a confirmation; on `!response.ok`, surface the error text.
+Minimal structure (the comment marks where the unmodified canonical agent must
+be pasted; `examples/nav-capture-test.html` is the complete runnable example):
+
+```html
+<!doctype html>
+<html lang="en" data-issue="476">
+<head>
+  <meta charset="utf-8">
+  <title>Choose the rollout</title>
+</head>
+<body>
+  <main>
+    <h1>Choose the rollout</h1>
+    <p>The argument and evidence belong here.</p>
+    <form>
+      <section data-decision="scope" data-label="Rollout scope">
+        <h2>Scope</h2>
+        <label><input type="radio" name="scope" value="pilot"> Pilot</label>
+        <label><input type="radio" name="scope" value="broad"> Broad</label>
+      </section>
+    </form>
+  </main>
+  <script data-arachne-brief-agent>
+  /* Paste the complete contents of ui/brief-agent.js here verbatim. */
+  </script>
+</body>
+</html>
+```
+
+The canonical agent serializes the named controls as opaque `form`, composes a
+readable default `markdown` record (or honors the brief's capture hooks), and
+reports completeness. The surrounding `<nav>` companion owns progress, local
+drafts, and the one-ruling Send operation.
 
 ## Gotchas
 
