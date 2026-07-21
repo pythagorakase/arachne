@@ -35,6 +35,9 @@
 
   <section class="reading-pane" data-reading-region aria-label="Decision reading pane">
     <header class="reading-toolbar">
+      <button class="phone-inbox-control" type="button"
+        aria-label="Return to decision inbox" data-phone-inbox>‹ INBOX</button>
+      <span class="phone-reading-context" data-phone-reading-context></span>
       <div class="reading-identity">
         <span class="reading-breadcrumb" data-reading-breadcrumb>SELECT A BRIEF</span>
         <span class="status-pill" data-reading-status hidden>AWAITING</span>
@@ -93,4 +96,37 @@
       </p>
     </footer>
   </aside>
+
+  <section class="ruling-ribbon" aria-label="Ruling Ribbon"
+    data-ruling-ribbon>
+    <p class="ribbon-message" role="status" aria-live="polite"
+      data-ribbon-message>Select a brief to begin a ruling.</p>
+    <div class="ribbon-body" data-ribbon-body hidden>
+      <div class="ribbon-axis-stepper" role="group" aria-label="Ruling axes"
+        data-ribbon-axis-stepper></div>
+      <div class="ribbon-axis-row">
+        <div class="ribbon-axis-capture">
+          <div class="ribbon-axis-label" data-ribbon-axis-label></div>
+          <div class="ribbon-option-pills" role="group"
+            data-ribbon-axis-controls></div>
+        </div>
+        <button class="ribbon-note-toggle" type="button"
+          title="Note for this axis" aria-label="Show note for this axis"
+          aria-expanded="false" data-ribbon-note-toggle>✎</button>
+      </div>
+      <div class="ribbon-note-panel" data-ribbon-note-panel hidden>
+        <textarea rows="3" placeholder="Add a note for this axis…"
+          data-ribbon-note></textarea>
+        <p class="ribbon-note-requirement"
+          data-ribbon-note-requirement hidden>
+          Discuss requires a note before this axis is complete.
+        </p>
+      </div>
+      <div class="ribbon-footer">
+        <span class="ribbon-progress" data-ribbon-progress>0 of 0 ruled</span>
+        <button class="ribbon-send" type="button" disabled
+          data-ribbon-send>SEND RULING</button>
+      </div>
+    </div>
+  </section>
 </main>

@@ -1,0 +1,39 @@
+{
+  "contract": "v2",
+  "issue": "scroll-sync-test",
+  "title": "Docket Scroll-Sync Test Brief",
+  "repo": "Arachne · Stage C fixture",
+  "overall_notes": false,
+  "axes": [
+    {
+      "id": "scope",
+      "label": "Axis 1 · Scope",
+      "select": "one",
+      "notes": true,
+      "options": [
+        {"id": "narrow", "label": "Narrow"},
+        {"id": "wide", "label": "Wide"}
+      ]
+    },
+    {
+      "id": "evolution",
+      "label": "Axis 2 · Evolution",
+      "select": "one",
+      "notes": true,
+      "options": [
+        {"id": "derived", "label": "Derived"},
+        {"id": "ledgered", "label": "Ledgered"}
+      ]
+    },
+    {
+      "id": "custody",
+      "label": "Axis 3 · Custody",
+      "select": "one",
+      "notes": true,
+      "options": [
+        {"id": "local", "label": "Local"},
+        {"id": "shared", "label": "Shared"}
+      ]
+    }
+  ]
+}
