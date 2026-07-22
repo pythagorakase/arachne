@@ -39,6 +39,7 @@ from ui import (
     fallback_title,
     font_asset,
     page_title,
+    public_app_asset,
     render_bootstrap,
     render_inbox,
     render_locked_inbox,
@@ -788,6 +789,17 @@ class ArachneHandler(BaseHTTPRequestHandler):
     def _get(self) -> None:
         parsed = urlsplit(self.path)
         path = unquote(parsed.path)
+        install_asset = public_app_asset(path)
+        if install_asset is not None:
+            if parsed.query:
+                raise ClientProblem(
+                    HTTPStatus.NOT_FOUND,
+                    "not_found",
+                    "no such Arachne install asset",
+                )
+            body, content_type = install_asset
+            self._write(HTTPStatus.OK, body, content_type)
+            return
         if path == "/health":
             self._json(HTTPStatus.OK, self._health_payload())
             return

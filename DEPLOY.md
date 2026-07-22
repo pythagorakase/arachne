@@ -94,6 +94,20 @@ core's latest sequence. The sidecar has no durable state of its own.
 - OpenSSL, used by the checked-in TLS initializer to create a private localhost
   CA and a leaf with `DNS:localhost` and `IP:127.0.0.1` subject alternatives.
 
+### iPhone and iPad convenience
+
+After enrolling an iPhone or iPad in the tailnet, enable Tailscale **VPN On
+Demand** and use MagicDNS hostname matching for `*.ts.net`. The Arachne Home
+Screen app can then bring up the tunnel when its private URL is opened. Only
+one on-demand VPN can be active at a time on iOS/iPadOS, so confirm that another
+VPN profile is not taking precedence. See Tailscale's
+[iOS and macOS VPN On Demand guide](https://tailscale.com/docs/features/client/ios-vpn-on-demand).
+
+Install Arachne from the authenticated inbox in Safari. If the installed app's
+sliding session later lapses, mint a no-argument `bootstrap_url()` and paste the
+single-use URL into its locked screen; do not save the enrollment URL or owner
+token in deployment notes.
+
 ---
 
 ## Steps (example commands)

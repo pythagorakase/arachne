@@ -18,9 +18,11 @@ INBOX_CSP = (
     "default-src 'none'; "
     "script-src 'unsafe-inline'; "
     "style-src 'unsafe-inline'; "
+    "img-src 'self'; "
     "font-src 'self'; "
     "connect-src 'self'; "
     "frame-src 'self'; "
+    "manifest-src 'self'; "
     "object-src 'none'; "
     "base-uri 'none'; "
     "form-action 'none'; "
@@ -52,6 +54,7 @@ _LOCKED_TEMPLATE = _load_asset("locked.html")
 _BOOTSTRAP_TEMPLATE = _load_asset("bootstrap.html")
 _INBOX_STYLE = _load_asset("inbox.css").strip()
 _INBOX_SCRIPT = _load_asset("inbox.js").strip()
+_LOCKED_SCRIPT = _load_asset("locked.js").strip()
 _FONT_ASSETS = frozenset(
     {
         "Megrim.ttf",
@@ -60,6 +63,24 @@ _FONT_ASSETS = frozenset(
         "Spectral-SemiBold.ttf",
     }
 )
+_PUBLIC_APP_ASSETS = {
+    "/manifest.webmanifest": (
+        _ASSET_DIR / "manifest.webmanifest",
+        "application/manifest+json",
+    ),
+    "/ui/icons/arachne-180.png": (
+        _ASSET_DIR / "icons" / "arachne-180.png",
+        "image/png",
+    ),
+    "/ui/icons/arachne-192.png": (
+        _ASSET_DIR / "icons" / "arachne-192.png",
+        "image/png",
+    ),
+    "/ui/icons/arachne-512.png": (
+        _ASSET_DIR / "icons" / "arachne-512.png",
+        "image/png",
+    ),
+}
 
 
 def _fill_template(
@@ -200,7 +221,22 @@ def render_inbox(
 def render_locked_inbox() -> bytes:
     """Render the non-disclosing shell shown without a live session."""
 
-    return _inbox_document(_LOCKED_TEMPLATE.strip())
+    return _inbox_document(_LOCKED_TEMPLATE.strip(), _LOCKED_SCRIPT)
+
+
+def public_app_asset(path: str) -> tuple[bytes, str] | None:
+    """Return one non-sensitive install asset from the exact public allowlist."""
+
+    record = _PUBLIC_APP_ASSETS.get(path)
+    if record is None:
+        return None
+    asset, content_type = record
+    if asset.is_symlink() or not asset.is_file():
+        raise RuntimeError(f"Arachne install asset is missing or unsafe: {path!r}")
+    try:
+        return asset.read_bytes(), content_type
+    except OSError as exc:
+        raise RuntimeError(f"could not load Arachne install asset {path!r}") from exc
 
 
 def font_asset(name: str) -> bytes | None:
