@@ -240,6 +240,7 @@ class UiStructureTests(unittest.TestCase):
         self.assertIn("data-enrollment-url", rendered)
         self.assertIn('fetch("/session"', rendered)
         self.assertIn('JSON.stringify({ticket, page: "/"})', rendered)
+        self.assertIn("not a link to an individual decision", rendered)
         self.assertNotIn("Awaiting ruling", rendered)
         self.assertNotIn("data-arachne-shell", rendered)
         self.assertNotIn("decision_476.html", rendered)

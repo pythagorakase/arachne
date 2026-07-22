@@ -63,6 +63,9 @@ _FONT_ASSETS = frozenset(
         "Spectral-SemiBold.ttf",
     }
 )
+# Every key in this map bypasses browser-session authentication in
+# ``server.ArachneHandler._get``. Keep it limited to non-sensitive install
+# branding; briefs, fonts, rulings, drafts, and inbox data must never enter it.
 _PUBLIC_APP_ASSETS = {
     "/manifest.webmanifest": (
         _ASSET_DIR / "manifest.webmanifest",

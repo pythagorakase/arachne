@@ -1,6 +1,9 @@
 (() => {
   "use strict";
 
+  // Authentication.issue_bootstrap_ticket currently uses
+  // secrets.token_urlsafe(32), which yields 43 characters. Keep this broad
+  // defensive bound aligned with server.py's BOOTSTRAP_TICKET grammar.
   const TICKET = /^[A-Za-z0-9_-]{32,256}$/;
 
   function inboxEnrollmentTicket(rawValue, currentOrigin) {
@@ -59,7 +62,8 @@
     input.value = "";
     if (!ticket) {
       showStatus(
-        "Paste a fresh inbox enrollment link from this Arachne server.",
+        "Paste a fresh inbox enrollment link from this Arachne server, " +
+          "not a link to an individual decision.",
         true,
       );
       input.focus();
