@@ -99,9 +99,10 @@ and a semantic public-share source**:
   `data-decision="<stable-id>"`. `data-label="Human label"` is optional; without
   it the agent derives a label from the part's heading/text.
 - Put the issue token on `<html data-issue="…">` or `<body data-issue="…">`.
-- Give every substantive visual an LLM-readable text equivalent. A `<figure>`,
-  `<img>`, `<canvas>`, `<svg role="img">`, or custom interactive region marked
-  `data-arachne-visual` must have an LLM alternative. An ordinary image may
+- Give every substantive visual or recording an LLM-readable text equivalent.
+  A `<figure>`, `<img>`, `<canvas>`, `<audio>`, `<video>`, `<svg role="img">`, or
+  custom interactive region marked `data-arachne-visual` must have an LLM
+  alternative. An ordinary image may
   use a non-empty `alt="…"`; a simple custom visual may use
   `data-arachne-llm-alt="…"` directly. Charts, diagrams, and simulations
   should place semantic HTML in an inert descendant

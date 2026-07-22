@@ -88,6 +88,71 @@ class SemanticSnapshotTests(unittest.TestCase):
             with self.subTest(source=source), self.assertRaises(ValueError):
                 validate_llm_alternatives(source)
 
+    def test_audio_and_video_require_llm_alternatives(self) -> None:
+        for tag in ("audio", "video"):
+            with self.subTest(tag=tag), self.assertRaisesRegex(
+                ValueError, "data-arachne-llm-alt"
+            ):
+                validate_llm_alternatives(
+                    f'<main><{tag} src="evidence.mp4"></{tag}></main>'
+                )
+
+            source = (
+                f'<main><{tag} src="evidence.mp4" '
+                'data-arachne-llm-alt="The recording supports option B.">'
+                f"</{tag}></main>"
+            )
+            snapshot = build_snapshot(
+                source,
+                issue="media-1",
+                created_at="2026-07-22T12:00:00.000Z",
+                expires_at="2026-08-21T12:00:00.000Z",
+            )
+            self.assertIn("The recording supports option B", snapshot.html)
+            self.assertIn("The recording supports option B", snapshot.markdown)
+
+    def test_markdown_escapes_authored_markup_and_preserves_preformatted_code(
+        self,
+    ) -> None:
+        source = """<!doctype html><html><head>
+        <title>&lt;img src=&quot;https://tracker.example/title&quot;&gt;</title>
+        </head><body><main>
+        <p>&lt;img src=&quot;https://tracker.example/pixel&quot;&gt;</p>
+        <p>![remote](https://tracker.example/markdown.png)</p>
+        <pre>if x:
+    first()
+
+    second(```)</pre>
+        <ul><li><pre>nested:
+    first()
+
+
+    second()</pre></li></ul>
+        </main></body></html>"""
+        snapshot = build_snapshot(
+            source,
+            issue='<img src="https://tracker.example/issue">',
+            created_at="2026-07-22T12:00:00.000Z",
+            expires_at="2026-08-21T12:00:00.000Z",
+        )
+
+        self.assertNotIn('<img src="https://tracker.example', snapshot.markdown)
+        self.assertIn(
+            '&lt;img src="https://tracker.example/pixel"&gt;', snapshot.markdown
+        )
+        self.assertIn(
+            r"\!\[remote\](https://tracker.example/markdown.png)",
+            snapshot.markdown,
+        )
+        self.assertIn(
+            "````\nif x:\n    first()\n\n    second(```)\n````",
+            snapshot.markdown,
+        )
+        self.assertIn(
+            "- ```\n  nested:\n      first()\n  \n  \n      second()\n  ```",
+            snapshot.markdown,
+        )
+
     def test_html_and_markdown_share_one_complete_inert_semantic_source(self) -> None:
         snapshot = build_snapshot(
             SHAREABLE_PAGE,

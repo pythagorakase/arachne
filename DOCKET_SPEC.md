@@ -34,9 +34,10 @@ A v2 brief is a self-contained argument **plus its own capture `<form>`**:
 - Keep the page self-contained. It executes in the opaque iframe sandbox
   `sandbox="allow-scripts"`.
 - Supply an LLM-readable equivalent for every substantive visual. A
-  `<figure>`, `<img>`, `<canvas>`, `<svg role="img">`, or custom region marked
-  `data-arachne-visual` must contain or carry `data-arachne-llm-alt`. Complex
-  and interactive visuals use inert semantic content:
+  `<figure>`, `<img>`, `<canvas>`, `<audio>`, `<video>`, `<svg role="img">`, or
+  custom region marked `data-arachne-visual` must contain or carry
+  `data-arachne-llm-alt`. Complex and interactive media use inert semantic
+  content:
 
   ```html
   <figure data-arachne-visual>

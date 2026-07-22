@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Iterable
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 
 LLM_ALT_ATTRIBUTE = "data-arachne-llm-alt"
@@ -292,7 +292,13 @@ def _is_decorative(node: Element) -> bool:
 
 
 def _is_visual(node: Element) -> bool:
-    if VISUAL_ATTRIBUTE in node.attrs or node.tag in {"figure", "img", "canvas"}:
+    if VISUAL_ATTRIBUTE in node.attrs or node.tag in {
+        "audio",
+        "canvas",
+        "figure",
+        "img",
+        "video",
+    }:
         return True
     return node.tag == "svg" and (node.attrs.get("role") or "").lower() == "img"
 
@@ -420,7 +426,9 @@ def _sanitize_children(node: Element) -> list[Element | str]:
     result: list[Element | str] = []
     for child in node.children:
         if isinstance(child, str):
-            if child.isspace():
+            if node.tag == "pre":
+                result.append(child)
+            elif child.isspace():
                 if node.tag not in _BLOCK_CONTAINERS:
                     result.append(" ")
             else:
@@ -570,26 +578,70 @@ def _render_html_node(node: Element | str) -> str:
     return opening + "".join(_render_html_node(child) for child in node.children) + f"</{tag}>"
 
 
-def _plain_inline(node: Element | str) -> str:
+def _plain_verbatim(node: Element | str) -> str:
     if isinstance(node, str):
-        return _COLLAPSE.sub(" ", node)
-    return "".join(_plain_inline(child) for child in node.children)
+        return node
+    return "".join(_plain_verbatim(child) for child in node.children)
+
+
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_\[\]!~])")
+
+
+def _markdown_text(value: str) -> str:
+    """Render authored prose as text, never as Markdown or inline HTML."""
+
+    collapsed = _COLLAPSE.sub(" ", value)
+    escaped_html = html.escape(collapsed, quote=False)
+    escaped = _MARKDOWN_SPECIAL.sub(r"\\\1", escaped_html)
+    # Characters that only become structural at the beginning of a Markdown
+    # block stay readable elsewhere. Protect their block-marker forms here.
+    escaped = re.sub(r"\A( {0,3})(>)", r"\1\\\2", escaped)
+    escaped = re.sub(r"\A( {0,3})(#{1,6})(?=\s)", r"\1\\\2", escaped)
+    escaped = re.sub(r"\A( {0,3})([-+])(?=\s)", r"\1\\\2", escaped)
+    escaped = re.sub(
+        r"\A( {0,3})(\d{1,9})([.)])(?=\s)", r"\1\2\\\3", escaped
+    )
+    escaped = re.sub(r"\A( {0,3})(-{3,})(?=\s*\Z)", r"\1\\\2", escaped)
+    return escaped
+
+
+def _markdown_code_span(value: str) -> str:
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    longest = max((len(run) for run in re.findall(r"`+", normalized)), default=0)
+    fence = "`" * max(1, longest + 1)
+    if normalized.startswith(("`", " ")) or normalized.endswith(("`", " ")):
+        normalized = f" {normalized} "
+    return f"{fence}{normalized}{fence}"
+
+
+def _markdown_code_block(value: str) -> str:
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+    longest = max((len(run) for run in re.findall(r"`+", normalized)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}\n{normalized}\n{fence}\n\n"
+
+
+def _markdown_destination(value: str) -> str:
+    # Angle-bracket destinations plus percent-encoding keep authored URL
+    # punctuation from terminating the generated Markdown link.
+    return quote(value, safe=":/?#[]@!$&'*+,;=%~-._")
 
 
 def _markdown_inline(node: Element | str) -> str:
     if isinstance(node, str):
-        return _COLLAPSE.sub(" ", node)
+        return _markdown_text(node)
+    if node.tag == "code":
+        return _markdown_code_span(_plain_verbatim(node))
     content = "".join(_markdown_inline(child) for child in node.children)
     if node.tag in {"strong", "b"}:
         return f"**{content.strip()}**"
     if node.tag in {"em", "i"}:
         return f"*{content.strip()}*"
-    if node.tag == "code":
-        return f"`{content.strip().replace('`', 'ˋ')}`"
     if node.tag == "del" or node.tag == "s":
         return f"~~{content.strip()}~~"
     if node.tag == "a" and node.attrs.get("href"):
-        return f"[{content.strip()}]({node.attrs['href']})"
+        destination = _markdown_destination(node.attrs["href"])
+        return f"[{content.strip()}](<{destination}>)"
     if node.tag == "br":
         return "  \n"
     if node.tag in {"sub", "sup"}:
@@ -632,7 +684,7 @@ def _markdown_table(node: Element) -> str:
 
 def _render_markdown(node: Element | str, depth: int = 0) -> str:
     if isinstance(node, str):
-        return _COLLAPSE.sub(" ", node)
+        return _markdown_text(node)
     if node.tag == "span" and node.attrs.get("class") == "control-note":
         return _markdown_inline(node).strip() + "\n\n"
     if node.tag in {
@@ -662,7 +714,7 @@ def _render_markdown(node: Element | str, depth: int = 0) -> str:
         level = int(node.tag[1])
         return f"{'#' * level} {_markdown_inline(node).strip()}\n\n"
     if node.tag == "pre":
-        return f"```\n{_plain_inline(node).strip()}\n```\n\n"
+        return _markdown_code_block(_plain_verbatim(node))
     if node.tag == "hr":
         return "---\n\n"
     if node.tag == "br":
@@ -711,11 +763,38 @@ def _render_markdown(node: Element | str, depth: int = 0) -> str:
     return content
 
 
+def _markdown_fence_length(line: str) -> int | None:
+    candidate = line.strip()
+    while candidate.startswith(">"):
+        candidate = candidate[1:].lstrip()
+    list_prefix = re.match(r"(?:[-+*]|\d{1,9}[.)])\s+", candidate)
+    if list_prefix:
+        candidate = candidate[list_prefix.end() :].lstrip()
+    match = re.fullmatch(r"`{3,}", candidate)
+    return len(match.group(0)) if match else None
+
+
 def _clean_markdown(value: str) -> str:
-    lines = [line.rstrip() for line in value.splitlines()]
     result: list[str] = []
     blank = False
-    for line in lines:
+    fence_length: int | None = None
+    for raw_line in value.splitlines():
+        current_fence_length = _markdown_fence_length(raw_line)
+        if fence_length is not None:
+            result.append(raw_line)
+            if (
+                current_fence_length is not None
+                and current_fence_length >= fence_length
+            ):
+                fence_length = None
+                blank = False
+            continue
+        line = raw_line.rstrip()
+        if current_fence_length is not None:
+            result.append(line)
+            fence_length = current_fence_length
+            blank = False
+            continue
         if line:
             result.append(line)
             blank = False
@@ -791,10 +870,12 @@ def build_snapshot(
         f"<style>{_SHARE_STYLE}</style></head><body>{body}</body></html>\n"
     )
     content_markdown = _clean_markdown(_render_markdown(semantic))
+    markdown_title = _markdown_text(title)
+    markdown_issue = _markdown_text(issue)
     markdown = (
-        f"# {title}\n\n"
+        f"# {markdown_title}\n\n"
         "> Public, read-only Arachne decision snapshot  \n"
-        f"> Issue: {issue}  \n"
+        f"> Issue: {markdown_issue}  \n"
         f"> Created: {created_at}  \n"
         f"> Expires: {expires_at}  \n"
         f"> Content SHA-256: `{canonical_sha256}`\n\n"
