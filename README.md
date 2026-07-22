@@ -72,6 +72,31 @@ agent for a fresh bootstrap link and the bookmark unlocks itself. Add it to a
 phone home screen once and the agent never needs to hand over per-decision
 URLs again.
 
+### Install on iPhone or iPad
+
+Arachne is an installable Home Screen web app; it does not need an Xcode
+project or Apple Developer Program membership.
+
+1. Connect the device to the tailnet and open a fresh inbox bootstrap link in
+   Safari.
+2. Wait for the authenticated inbox at `/`, then choose **Share → Add to Home
+   Screen** and leave **Open as Web App** enabled.
+3. Launch Arachne from its Home Screen icon. Install before starting a draft:
+   iOS copies the session cookie into the new web app, but does not copy
+   Safari's `localStorage` drafts.
+
+The installed app has its own browser data store. If it sits unused long
+enough for its fifteen-day session to lapse, ask the agent for a no-argument
+`bootstrap_url()` and paste that complete, single-use inbox enrollment link
+into the locked screen. The installed app accepts only a same-origin,
+inbox-bound ticket; it never accepts or stores the durable application token.
+
+Arachne deliberately has no service worker, offline cache, notifications, or
+badge. It needs the live tailnet service to read or file a ruling. On iOS and
+iPadOS, Tailscale's [VPN On Demand](https://tailscale.com/docs/features/client/ios-vpn-on-demand)
+can automatically connect for `*.ts.net` hostnames so opening the icon does not
+require opening Tailscale first.
+
 ## Security & host-policy posture
 
 - **No public surface.** Nothing listens on the host's public interface;

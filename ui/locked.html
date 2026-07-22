@@ -2,6 +2,16 @@
   <header><h1>Arachne</h1><p class="tag">decision loom</p></header>
   <section class="locked-card" aria-labelledby="locked-title">
     <p class="locked" id="locked-title">This device holds no live Arachne session.</p>
-    <p class="hint">Ask your agent for a fresh bootstrap key, then return here — the inbox unlocks itself.</p>
+    <p class="hint">Ask your agent for a fresh inbox enrollment link. It expires after five minutes and works once.</p>
+    <form class="enrollment-form" data-enrollment-form novalidate>
+      <label for="enrollment-url">Enrollment link</label>
+      <input id="enrollment-url" name="enrollment-url" type="url"
+        inputmode="url" autocomplete="off" autocapitalize="none"
+        spellcheck="false" placeholder="https://…/bootstrap#ticket=…"
+        data-enrollment-url>
+      <button type="submit">UNLOCK ARACHNE</button>
+      <p class="enrollment-status" role="status" aria-live="polite"
+        data-enrollment-status></p>
+    </form>
   </section>
 </main>

@@ -185,6 +185,35 @@ class AuthenticationExpiryTests(unittest.TestCase):
             self.assertIn("HttpOnly", header)
             self.assertIn("SameSite=Strict", header)
 
+    def test_bootstrap_tickets_expire_and_are_consumed_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            authentication = arachne_server.Authentication(
+                Path(directory) / "auth-token"
+            )
+            issued_at = 1_700_000_000
+            with patch.object(arachne_server.time, "time", return_value=issued_at):
+                expired_ticket, expires_at = authentication.issue_bootstrap_ticket(
+                    "/"
+                )
+            self.assertEqual(
+                expires_at, issued_at + arachne_server.BOOTSTRAP_TICKET_SECONDS
+            )
+            with patch.object(
+                arachne_server.time, "time", return_value=expires_at
+            ):
+                self.assertFalse(
+                    authentication.consume_bootstrap_ticket(expired_ticket, "/")
+                )
+
+            with patch.object(arachne_server.time, "time", return_value=issued_at):
+                live_ticket, _ = authentication.issue_bootstrap_ticket("/")
+                self.assertTrue(
+                    authentication.consume_bootstrap_ticket(live_ticket, "/")
+                )
+                self.assertFalse(
+                    authentication.consume_bootstrap_ticket(live_ticket, "/")
+                )
+
     def test_tls_environment_requires_a_nonempty_pair(self) -> None:
         for environment in (
             {"ARACHNE_TLS_CERT_FILE": "/tmp/cert.pem"},

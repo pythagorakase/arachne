@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "Arachne Decision Loom",
+  "short_name": "Arachne",
+  "description": "A private agent-human decision loom.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#06090e",
+  "theme_color": "#080b12",
+  "icons": [
+    {
+      "src": "/ui/icons/arachne-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/ui/icons/arachne-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

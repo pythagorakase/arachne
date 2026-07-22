@@ -380,7 +380,7 @@ class ArachneEndToEndTests(unittest.TestCase):
         self.assertEqual(invalid_page.exception.code, 400)
         self.assertFalse((self.pages / "decision_invalid.html").exists())
 
-    def test_manifest_endpoint_is_gone_and_page_csp_is_unchanged(self) -> None:
+    def test_axis_manifest_endpoint_is_gone_and_page_csp_is_unchanged(self) -> None:
         name = "decision_parts.html"
         post_json(
             self.service.url,
@@ -444,6 +444,8 @@ class ArachneEndToEndTests(unittest.TestCase):
             "connect-src 'self'",
             "frame-src 'self'",
             "font-src 'self'",
+            "img-src 'self'",
+            "manifest-src 'self'",
             "object-src 'none'",
             "base-uri 'none'",
             "frame-ancestors 'none'",
@@ -506,8 +508,46 @@ class ArachneEndToEndTests(unittest.TestCase):
         self.assertIn("text/html", raised.exception.headers["Content-Type"])
         body = raised.exception.read().decode()
         self.assertIn("no live Arachne session", body)
+        self.assertIn("data-enrollment-form", body)
+        self.assertIn('fetch("/session"', body)
         self.assertNotIn("decision_476.html", body)
         self.assertNotIn("Awaiting", body)
+
+    def test_home_screen_install_assets_are_public_and_exactly_allowlisted(self) -> None:
+        with urlopen(f"{self.service.url}/manifest.webmanifest", timeout=1) as response:
+            manifest = json.load(response)
+            self.assertEqual(response.status, 200)
+            self.assertEqual(
+                response.headers["Content-Type"], "application/manifest+json"
+            )
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(manifest["start_url"], "/")
+        self.assertEqual(manifest["scope"], "/")
+        self.assertEqual(manifest["display"], "standalone")
+
+        for size in (180, 192, 512):
+            with self.subTest(size=size), urlopen(
+                f"{self.service.url}/ui/icons/arachne-{size}.png", timeout=1
+            ) as response:
+                body = response.read()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers["Content-Type"], "image/png")
+                self.assertEqual(body[:8], b"\x89PNG\r\n\x1a\n")
+                self.assertEqual(int.from_bytes(body[16:20], "big"), size)
+                self.assertEqual(int.from_bytes(body[20:24], "big"), size)
+
+        for path in (
+            "/ui/icons/arachne-icon.svg",
+            "/ui/icons/unknown.png",
+        ):
+            with self.subTest(path=path), self.assertRaises(HTTPError) as rejected:
+                urlopen(f"{self.service.url}{path}", timeout=1)
+            self.assertEqual(rejected.exception.code, 401)
+
+        with self.assertRaises(HTTPError) as queried:
+            urlopen(f"{self.service.url}/manifest.webmanifest?download=1", timeout=1)
+        self.assertEqual(queried.exception.code, 404)
 
     def test_browser_session_slides_past_half_life(self) -> None:
         import server as arachne_server

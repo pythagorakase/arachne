@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#06090e"/>
+  <path d="M80 206C256 78 416 68 568 140S820 272 944 184M74 822C256 930 416 928 570 858S818 738 950 840"
+    fill="none" stroke="#6d527f" stroke-width="8" stroke-linecap="round" opacity=".38"/>
+  <path d="M168 758C264 678 332 774 430 704S624 610 844 718"
+    fill="none" stroke="#e77e58" stroke-width="14" stroke-linecap="round"/>
+  <circle cx="168" cy="758" r="18" fill="#e77e58"/>
+  <circle cx="844" cy="718" r="11" fill="#e77e58"/>
+  <!-- Megrim's A glyph converted to a path so the icon is deterministic. -->
+  <path d="M117 30H485L273 613L50 0H18L273 701L528 0H117Z"
+    transform="translate(210 880) scale(1.1 -1.1)"
+    fill="#d6c78f"/>
+</svg>

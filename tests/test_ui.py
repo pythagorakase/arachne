@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import tempfile
@@ -11,6 +12,7 @@ from page_contract import prepare_html
 from ui import (
     fallback_title,
     page_title,
+    public_app_asset,
     render_bootstrap,
     render_inbox,
     render_locked_inbox,
@@ -35,6 +37,8 @@ class UiStructureTests(unittest.TestCase):
             "inbox.html",
             "inbox.js",
             "locked.html",
+            "locked.js",
+            "manifest.webmanifest",
             "render.py",
         }
         actual_assets = {path.name for path in UI.iterdir() if path.is_file()}
@@ -47,6 +51,14 @@ class UiStructureTests(unittest.TestCase):
                 "Megrim.ttf",
                 "Spectral-Regular.ttf",
                 "Spectral-SemiBold.ttf",
+            },
+        )
+        self.assertEqual(
+            {path.name for path in (UI / "icons").glob("*.png")},
+            {
+                "arachne-180.png",
+                "arachne-192.png",
+                "arachne-512.png",
             },
         )
         server_source = (REPO / "server.py").read_text(encoding="utf-8")
@@ -97,16 +109,24 @@ class UiStructureTests(unittest.TestCase):
         self.assertNotIn("A <thorny>", rendered)
         self.assertIn("ruling 7", rendered)
         self.assertIn("color-scheme: dark;", rendered)
+        self.assertIn('rel="manifest" href="/manifest.webmanifest"', rendered)
+        self.assertIn("viewport-fit=cover", rendered)
+        self.assertIn('rel="apple-touch-icon" sizes="180x180"', rendered)
         self.assertIn("arachne:draft:v3:", rendered)
         self.assertIn('fetch("/ruling"', rendered)
         self.assertNotIn("@@ARACHNE_", rendered)
 
-    def test_phone_shell_is_a_compact_part_nav_without_capture_controls(self) -> None:
+    def test_phone_and_tablet_shells_share_the_compact_ruling_ribbon(self) -> None:
         css = (UI / "inbox.css").read_text(encoding="utf-8")
         client = (UI / "inbox.js").read_text(encoding="utf-8")
         rendered = render_inbox([], []).decode("utf-8")
 
         self.assertIn("@media (max-width: 760px)", css)
+        self.assertIn("@media (max-width: 1099px)", css)
+        self.assertIn("--list-width: clamp(260px, 32vw, 320px)", css)
+        self.assertIn("left: var(--list-width)", css)
+        self.assertIn("env(safe-area-inset-top)", css)
+        self.assertIn("env(safe-area-inset-bottom)", css)
         self.assertIn(".app-frame.is-phone-reading .ruling-ribbon", css)
         self.assertIn(".ribbon-part-dot.is-active", css)
         self.assertIn(".ribbon-part-dot.is-answered", css)
@@ -136,6 +156,59 @@ class UiStructureTests(unittest.TestCase):
         self.assertIn("invalidateForeignFrameDocument", client)
         self.assertNotIn("@@ARACHNE_", rendered)
 
+    def test_home_screen_manifest_and_icon_allowlist_are_complete(self) -> None:
+        manifest_record = public_app_asset("/manifest.webmanifest")
+        self.assertIsNotNone(manifest_record)
+        assert manifest_record is not None
+        manifest_bytes, content_type = manifest_record
+        self.assertEqual(content_type, "application/manifest+json")
+        manifest = json.loads(manifest_bytes)
+        self.assertEqual(
+            {
+                "id": manifest["id"],
+                "name": manifest["name"],
+                "short_name": manifest["short_name"],
+                "start_url": manifest["start_url"],
+                "scope": manifest["scope"],
+                "display": manifest["display"],
+                "orientation": manifest["orientation"],
+                "background_color": manifest["background_color"],
+                "theme_color": manifest["theme_color"],
+            },
+            {
+                "id": "/",
+                "name": "Arachne Decision Loom",
+                "short_name": "Arachne",
+                "start_url": "/",
+                "scope": "/",
+                "display": "standalone",
+                "orientation": "any",
+                "background_color": "#06090e",
+                "theme_color": "#080b12",
+            },
+        )
+        self.assertEqual(
+            [icon["sizes"] for icon in manifest["icons"]],
+            ["192x192", "512x512"],
+        )
+        self.assertTrue(
+            all(icon["purpose"] == "any maskable" for icon in manifest["icons"])
+        )
+
+        for size in (180, 192, 512):
+            with self.subTest(size=size):
+                record = public_app_asset(f"/ui/icons/arachne-{size}.png")
+                self.assertIsNotNone(record)
+                assert record is not None
+                body, icon_type = record
+                self.assertEqual(icon_type, "image/png")
+                self.assertEqual(body[:8], b"\x89PNG\r\n\x1a\n")
+                self.assertEqual(int.from_bytes(body[16:20], "big"), size)
+                self.assertEqual(int.from_bytes(body[20:24], "big"), size)
+
+        self.assertIsNone(public_app_asset("/ui/icons/arachne-icon.svg"))
+        self.assertIsNone(public_app_asset("/ui/icons/unknown.png"))
+
     def test_nav_capture_fixture_embeds_the_canonical_agent(self) -> None:
         canonical = (UI / "brief-agent.js").read_text(encoding="utf-8").strip()
         fixture_path = REPO / "examples" / "nav-capture-test.html"
@@ -163,6 +236,11 @@ class UiStructureTests(unittest.TestCase):
 
         self.assertIn("no live Arachne session", rendered)
         self.assertIn("<header><h1>Arachne</h1>", rendered)
+        self.assertIn("data-enrollment-form", rendered)
+        self.assertIn("data-enrollment-url", rendered)
+        self.assertIn('fetch("/session"', rendered)
+        self.assertIn('JSON.stringify({ticket, page: "/"})', rendered)
+        self.assertIn("not a link to an individual decision", rendered)
         self.assertNotIn("Awaiting ruling", rendered)
         self.assertNotIn("data-arachne-shell", rendered)
         self.assertNotIn("decision_476.html", rendered)
@@ -215,6 +293,33 @@ class InboxClientJavaScriptTests(unittest.TestCase):
             timeout=5,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_locked_shell_accepts_only_same_origin_inbox_tickets(self) -> None:
+        self.run_node(
+            r"""
+const assert = require("node:assert/strict");
+const {inboxEnrollmentTicket} = require("./ui/locked.js");
+const origin = "https://arachne.example-tailnet.ts.net";
+const ticket = "A".repeat(32);
+assert.equal(
+  inboxEnrollmentTicket(`${origin}/bootstrap#ticket=${ticket}`, origin),
+  ticket,
+);
+for (const candidate of [
+  "not a URL",
+  `https://other.example/bootstrap#ticket=${ticket}`,
+  `https://owner@arachne.example-tailnet.ts.net/bootstrap#ticket=${ticket}`,
+  `${origin}/bootstrap?next=decision_476.html#ticket=${ticket}`,
+  `${origin}/bootstrap#token=${ticket}`,
+  `${origin}/bootstrap#ticket=${ticket}&ticket=${ticket}`,
+  `${origin}/bootstrap#ticket=${ticket}&extra=1`,
+  `${origin}/bootstrap#ticket=too-short`,
+  `${origin}/other#ticket=${ticket}`,
+]) {
+  assert.equal(inboxEnrollmentTicket(candidate, origin), null, candidate);
+}
+"""
+        )
 
     def test_brief_agent_serializes_single_and_multi_value_controls(self) -> None:
         self.run_node(
