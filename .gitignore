@@ -4,6 +4,7 @@ __pycache__/
 
 # Published decision pages are runtime content, not application source.
 pages/*.html
+pages/.meta/
 !pages/.gitkeep
 
 # Rulings and cursors must never enter source control.
