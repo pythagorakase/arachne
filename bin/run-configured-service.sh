@@ -39,8 +39,12 @@ case ${1:-} in
     arachne_mcp_python=${ARACHNE_MCP_PYTHON:-${arachne_root}/.venv/bin/python}
     exec "$arachne_mcp_python" "$arachne_root/mcp_server.py"
     ;;
+  share)
+    arachne_python=${ARACHNE_PYTHON:-$(command -v python3)}
+    exec "$arachne_python" "$arachne_root/share_server.py"
+    ;;
   *)
-    printf 'usage: %s {server|mcp}\n' "$0" >&2
+    printf 'usage: %s {server|mcp|share}\n' "$0" >&2
     exit 2
     ;;
 esac

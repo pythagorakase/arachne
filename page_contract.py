@@ -10,6 +10,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from semantic_snapshot import validate_llm_alternatives
+
 
 PAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.html\Z")
 # Sidecar publication metadata lives under a dot-directory the page allowlist
@@ -83,7 +85,7 @@ def read_page_issue(pages_dir: Path, name: str) -> str | None:
 
 
 def prepare_html(name: str, html: str) -> str:
-    """Enforce the v2 brief-owned capture page contract."""
+    """Enforce brief-owned capture plus the semantic-share page contract."""
 
     if PAGE_NAME.fullmatch(name) is None:
         raise ValueError(f"page name is not allowlisted: {name}")
@@ -95,6 +97,7 @@ def prepare_html(name: str, html: str) -> str:
         raise ValueError(
             f"page references forbidden localStorage capture state under v2: {name}"
         )
+    validate_llm_alternatives(html)
     return html
 
 

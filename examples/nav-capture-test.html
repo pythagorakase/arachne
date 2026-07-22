@@ -39,6 +39,9 @@
     color: inherit;
     font: inherit;
   }
+  figure { margin: 0 0 28px; }
+  svg { display: block; width: 100%; height: auto; }
+  figcaption { margin-top: 8px; color: #b8aa92; }
 </style>
 </head>
 <body>
@@ -46,6 +49,25 @@
   <h1>Navigation Capture Test</h1>
   <p>A mixed-input brief for the Arachne navigation and mediated Send path.</p>
 </header>
+
+<figure data-arachne-visual>
+  <svg viewBox="0 0 600 120" role="img"
+    aria-label="Focused pilot feeds one channel; broad rollout fans out to three channels">
+    <path d="M80 60H250M350 60H520M350 60L520 20M350 60L520 100"
+      fill="none" stroke="#c4739f" stroke-width="4"/>
+    <text x="15" y="65" fill="#eadfca">scope</text>
+    <text x="255" y="65" fill="#eadfca">rollout</text>
+    <text x="525" y="25" fill="#eadfca">email</text>
+    <text x="525" y="65" fill="#eadfca">slack</text>
+    <text x="525" y="105" fill="#eadfca">phone</text>
+  </svg>
+  <figcaption>The selected scope determines how many delivery channels are relevant.</figcaption>
+  <template data-arachne-llm-alt>
+    <p>The diagram has a scope node feeding a rollout node. A focused pilot
+    uses one selected channel; a broad rollout may fan out independently to
+    email, Slack, and phone. Channel choices are complementary, not exclusive.</p>
+  </template>
+</figure>
 
 <section data-decision="scope" data-label="Scope">
   <h2>Choose the scope</h2>

@@ -114,6 +114,11 @@ class UiStructureTests(unittest.TestCase):
         self.assertIn('rel="apple-touch-icon" sizes="180x180"', rendered)
         self.assertIn("arachne:draft:v3:", rendered)
         self.assertIn('fetch("/ruling"', rendered)
+        self.assertIn("data-share-brief", rendered)
+        self.assertIn("data-share-result", rendered)
+        self.assertIn('fetch("/shares"', rendered)
+        self.assertIn("REVOKE NOW", rendered)
+        self.assertNotIn("confirm(", rendered)
         self.assertNotIn("@@ARACHNE_", rendered)
 
     def test_phone_and_tablet_shells_share_the_compact_ruling_ribbon(self) -> None:
@@ -223,6 +228,8 @@ class UiStructureTests(unittest.TestCase):
         self.assertIn('type="radio" name="scope"', fixture)
         self.assertIn('textarea id="rationale-text" name="rationale"', fixture)
         self.assertIn('data-issue="nav-capture-test"', fixture)
+        self.assertIn("data-arachne-visual", fixture)
+        self.assertIn("data-arachne-llm-alt", fixture)
         self.assertNotIn("<script src=", fixture)
         self.assertNotIn("/ruling", fixture)
         self.assertNotIn("localStorage", fixture)
@@ -318,6 +325,53 @@ for (const candidate of [
 ]) {
   assert.equal(inboxEnrollmentTicket(candidate, origin), null, candidate);
 }
+"""
+        )
+
+    def test_public_share_records_are_exact_30_day_capabilities(self) -> None:
+        self.run_node(
+            r"""
+const assert = require("node:assert/strict");
+const {isValidShareResponse, readShareResponse} = require("./ui/inbox.js");
+const id = "A".repeat(32);
+const valid = {
+  id,
+  url: `https://share.example/s/${id}`,
+  markdown_url: `https://share.example/s/${id}.md`,
+  created_at: "2026-07-22T12:00:00.000Z",
+  expires_at: "2026-08-21T12:00:00.000Z",
+  content_sha256: "b".repeat(64),
+  reused: false,
+};
+assert.equal(isValidShareResponse(valid), true);
+for (const candidate of [
+  {...valid, extra: true},
+  {...valid, id: "short"},
+  {...valid, url: `https://other.example/s/${id}`},
+  {...valid, markdown_url: `https://share.example/s/${id}`},
+  {...valid, expires_at: "2026-08-20T12:00:00.000Z"},
+  {...valid, content_sha256: "not-a-hash"},
+]) {
+  assert.equal(isValidShareResponse(candidate), false);
+}
+
+(async () => {
+  const accepted = await readShareResponse(new Response(JSON.stringify(valid), {
+    status: 201,
+    headers: {"Content-Type": "application/json"},
+  }));
+  assert.deepEqual(accepted, valid);
+  await assert.rejects(
+    readShareResponse(new Response(JSON.stringify({detail: "missing LLM alt"}), {
+      status: 422,
+      headers: {"Content-Type": "application/json"},
+    })),
+    /missing LLM alt/,
+  );
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 """
         )
 

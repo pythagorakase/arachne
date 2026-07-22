@@ -1,13 +1,12 @@
 [Unit]
-Description=Arachne decision loom
+Description=Arachne public snapshot origin
 After=network-online.target
-Upholds=arachne-mcp.service arachne-share.service
 
 [Service]
 Type=simple
 Environment=ARACHNE_DEPLOY_ENV=%h/.config/arachne/deployment.env
 WorkingDirectory=%h/arachne
-ExecStart=%h/arachne/bin/run-configured-service.sh server
+ExecStart=%h/arachne/bin/run-configured-service.sh share
 Restart=on-failure
 RestartSec=5
 

@@ -226,6 +226,46 @@ class AuthenticationExpiryTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "ARACHNE_TLS_"):
                     arachne_server.Config.from_environment()
 
+    def test_public_share_origin_requires_a_bare_https_origin(self) -> None:
+        for value in (
+            "http://share.example",
+            "https://user@share.example",
+            "https://share.example/path",
+            "https://share.example?query=yes",
+            "https://share.example#fragment",
+            "https://share.example:not-a-port",
+            "file:///tmp/share",
+        ):
+            with self.subTest(value=value), patch.dict(
+                os.environ,
+                {"ARACHNE_SHARE_PUBLIC_URL": value},
+                clear=True,
+            ):
+                with self.assertRaisesRegex(ValueError, "ARACHNE_SHARE_PUBLIC_URL"):
+                    arachne_server.Config.from_environment()
+
+        for value, expected in (
+            ("https://share.example/", "https://share.example"),
+            ("http://127.0.0.1:8791", "http://127.0.0.1:8791"),
+            ("http://localhost:8791/", "http://localhost:8791"),
+        ):
+            with self.subTest(value=value), patch.dict(
+                os.environ,
+                {"ARACHNE_SHARE_PUBLIC_URL": value},
+                clear=True,
+            ):
+                self.assertEqual(
+                    arachne_server.Config.from_environment().share_public_url,
+                    expected,
+                )
+
+    def test_share_capability_is_redacted_from_private_access_logs(self) -> None:
+        share_id = "A" * 32
+        rendered_log = arachne_server.SHARE_REVOCATION_LOG_ID.sub(
+            r"\1<redacted>", f"POST /shares/{share_id}/revoke HTTP/1.1"
+        )
+        self.assertNotIn(share_id, rendered_log)
+
 
 class ServerProtocolHardeningTests(unittest.TestCase):
     def setUp(self) -> None:

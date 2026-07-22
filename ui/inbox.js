@@ -176,6 +176,87 @@
     return pendingScrollPart === null || pendingScrollPart === reportedPart;
   }
 
+  function isValidShareResponse(data) {
+    if (
+      !hasExactKeys(data, [
+        "content_sha256",
+        "created_at",
+        "expires_at",
+        "id",
+        "markdown_url",
+        "reused",
+        "url",
+      ]) ||
+      typeof data.id !== "string" ||
+      !/^[A-Za-z0-9_-]{32}$/.test(data.id) ||
+      typeof data.content_sha256 !== "string" ||
+      !/^[0-9a-f]{64}$/.test(data.content_sha256) ||
+      typeof data.created_at !== "string" ||
+      typeof data.expires_at !== "string" ||
+      typeof data.url !== "string" ||
+      typeof data.markdown_url !== "string" ||
+      typeof data.reused !== "boolean"
+    ) {
+      return false;
+    }
+    const created = Date.parse(data.created_at);
+    const expires = Date.parse(data.expires_at);
+    if (
+      !Number.isFinite(created) ||
+      !Number.isFinite(expires) ||
+      expires - created !== 30 * 24 * 60 * 60 * 1000
+    ) {
+      return false;
+    }
+    let publicUrl;
+    let markdownUrl;
+    try {
+      publicUrl = new URL(data.url);
+      markdownUrl = new URL(data.markdown_url);
+    } catch (_error) {
+      return false;
+    }
+    if (
+      !["http:", "https:"].includes(publicUrl.protocol) ||
+      publicUrl.username ||
+      publicUrl.password ||
+      publicUrl.search ||
+      publicUrl.hash ||
+      markdownUrl.origin !== publicUrl.origin ||
+      markdownUrl.username ||
+      markdownUrl.password ||
+      markdownUrl.search ||
+      markdownUrl.hash ||
+      publicUrl.pathname !== `/s/${data.id}` ||
+      markdownUrl.pathname !== `/s/${data.id}.md`
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  async function readShareResponse(response) {
+    let payload;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      throw new Error(
+        `HTTP ${response.status} share response was not valid JSON: ${error.message}`,
+      );
+    }
+    if (!response.ok) {
+      const detail =
+        payload && typeof payload.detail === "string"
+          ? payload.detail.trim()
+          : "";
+      throw new Error(detail || `the server returned HTTP ${response.status}`);
+    }
+    if (!isValidShareResponse(payload)) {
+      throw new Error("the server returned an invalid public-share record");
+    }
+    return payload;
+  }
+
   async function readRulingAcknowledgement(response, submittedIssue) {
     let acknowledgement;
     try {
@@ -225,10 +306,12 @@
       isValidBriefCaptureMessage,
       isValidBriefInViewMessage,
       isValidBriefRulingMessage,
+      isValidShareResponse,
       isMessageFromCurrentBrief,
       makeCollectMessage,
       makeDraftRecord,
       readRulingAcknowledgement,
+      readShareResponse,
       rulingMatchesPendingToken,
       shouldAcceptInViewReport,
       submissionFailureKind,
@@ -270,7 +353,17 @@
   const readingStatus = required("[data-reading-status]");
   const previousButton = required("[data-brief-previous]");
   const nextButton = required("[data-brief-next]");
+  const shareButton = required("[data-share-brief]");
+  const shareButtonLabel = required(".share-button-label");
   const expandLink = required("[data-brief-expand]");
+  const shareResult = required("[data-share-result]");
+  const shareStatus = required("[data-share-status]");
+  const shareExpiry = required("[data-share-expiry]");
+  const shareLink = required("[data-share-link]");
+  const shareCopyButton = required("[data-share-copy]");
+  const shareMarkdownLink = required("[data-share-markdown]");
+  const shareRevokeButton = required("[data-share-revoke]");
+  const shareCloseButton = required("[data-share-close]");
   const navTitle = required("[data-nav-decision-title]");
   const message = required("[data-nav-message]");
   const partOutline = required("[data-part-outline]");
@@ -287,6 +380,7 @@
 
   const captureByCard = new WeakMap();
   const activePartByCard = new WeakMap();
+  const shareByCard = new WeakMap();
   const state = {
     card: null,
     capture: null,
@@ -306,6 +400,8 @@
     pendingScrollPart: null,
     pendingScrollStartedAt: 0,
     pendingScrollTimer: null,
+    sharing: false,
+    revokingShare: false,
   };
   let collectTokenSequence = 0;
 
@@ -334,6 +430,70 @@
     ribbonMessage.textContent = text;
     ribbonMessage.className = "ribbon-message";
     if (kind) ribbonMessage.classList.add(`is-${kind}`);
+  }
+
+  function setShareButtonState(label, disabled) {
+    shareButtonLabel.textContent = label;
+    shareButton.disabled = disabled;
+    shareButton.setAttribute(
+      "aria-label",
+      label === "SHARE"
+        ? "Create and copy a 30-day public link"
+        : label.toLowerCase().replace("…", ""),
+    );
+  }
+
+  function hideShareResult() {
+    shareResult.hidden = true;
+    shareResult.classList.remove("is-error");
+  }
+
+  function showShareError(detail, record = null) {
+    if (record) {
+      showShareRecord(record, false);
+      shareResult.classList.add("is-error");
+      shareStatus.textContent = "Public link could not be revoked";
+      shareExpiry.textContent = detail;
+      return;
+    }
+    shareResult.hidden = false;
+    shareResult.classList.add("is-error");
+    shareStatus.textContent = "Public link was not created";
+    shareExpiry.textContent = detail;
+    shareLink.value = "";
+    shareLink.parentElement.hidden = true;
+    shareMarkdownLink.parentElement.hidden = true;
+  }
+
+  function showShareRecord(record, copied) {
+    shareResult.hidden = false;
+    shareResult.classList.remove("is-error");
+    shareStatus.textContent = copied ? "Public link copied" : "Public link ready";
+    shareExpiry.textContent = `Expires ${new Date(record.expires_at).toLocaleString()} · anyone with the link can read it`;
+    shareLink.value = record.url;
+    shareLink.parentElement.hidden = false;
+    shareMarkdownLink.href = record.markdown_url;
+    shareMarkdownLink.parentElement.hidden = false;
+    shareCopyButton.disabled = false;
+    shareRevokeButton.disabled = false;
+  }
+
+  async function copyShareLink() {
+    const text = shareLink.value;
+    if (!text) return false;
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_error) {
+      shareLink.focus();
+      shareLink.select();
+      shareLink.setSelectionRange(0, text.length);
+      try {
+        return document.execCommand("copy");
+      } catch (_fallbackError) {
+        return false;
+      }
+    }
   }
 
   function clearPendingScroll() {
@@ -402,6 +562,10 @@
     readingStatus.hidden = false;
     expandLink.href = briefPath(card.dataset.briefName || "");
     expandLink.setAttribute("aria-disabled", "false");
+    setShareButtonState("SHARE", state.sharing || state.revokingShare);
+    const shared = shareByCard.get(card);
+    if (shared) showShareRecord(shared, false);
+    else hideShareResult();
     navTitle.textContent = title;
     updateNavigation();
   }
@@ -1039,6 +1203,87 @@
     }
   }
 
+  async function shareCurrentBrief() {
+    if (state.sharing || state.revokingShare || !state.card) return;
+    const sharedCard = state.card;
+    state.sharing = true;
+    setShareButtonState("SHARING…", true);
+    hideShareResult();
+    try {
+      const response = await fetch("/shares", {
+        method: "POST",
+        headers: {"Content-Type": "application/json", Accept: "application/json"},
+        credentials: "same-origin",
+        body: JSON.stringify({page: sharedCard.dataset.briefName || ""}),
+      });
+      const record = await readShareResponse(response);
+      shareByCard.set(sharedCard, record);
+      if (state.card === sharedCard) {
+        showShareRecord(record, false);
+        const copied = await copyShareLink();
+        showShareRecord(record, copied);
+      }
+    } catch (error) {
+      if (state.card === sharedCard) {
+        const detail = error instanceof Error ? error.message : String(error);
+        showShareError(detail);
+      }
+      console.error(error);
+    } finally {
+      state.sharing = false;
+      setShareButtonState("SHARE", state.revokingShare || !state.card);
+    }
+  }
+
+  async function revokeCurrentShare() {
+    if (state.sharing || state.revokingShare || !state.card) return;
+    const sharedCard = state.card;
+    const record = shareByCard.get(sharedCard);
+    if (!record) return;
+    state.revokingShare = true;
+    setShareButtonState("REVOKING…", true);
+    shareRevokeButton.disabled = true;
+    try {
+      const response = await fetch(
+        `/shares/${encodeURIComponent(record.id)}/revoke`,
+        {
+          method: "POST",
+          headers: {"Content-Type": "application/json", Accept: "application/json"},
+          credentials: "same-origin",
+          body: "{}",
+        },
+      );
+      if (response.status !== 204) {
+        let detail = "";
+        try {
+          const payload = await response.json();
+          detail = typeof payload.detail === "string" ? payload.detail.trim() : "";
+        } catch (_error) {
+          // The status remains the useful fallback.
+        }
+        throw new Error(detail || `the server returned HTTP ${response.status}`);
+      }
+      shareByCard.delete(sharedCard);
+      if (state.card === sharedCard) {
+        shareStatus.textContent = "Public link revoked";
+        shareExpiry.textContent = "It is no longer available. Create a new link whenever needed.";
+        shareLink.value = "";
+        shareLink.parentElement.hidden = true;
+        shareMarkdownLink.parentElement.hidden = true;
+      }
+    } catch (error) {
+      if (state.card === sharedCard) {
+        const detail = error instanceof Error ? error.message : String(error);
+        showShareError(`Revocation failed: ${detail}`, record);
+        shareByCard.set(sharedCard, record);
+      }
+      console.error(error);
+    } finally {
+      state.revokingShare = false;
+      setShareButtonState("SHARE", state.sharing || !state.card);
+    }
+  }
+
   function resizeFromKeyboard(resizer, direction) {
     const isList = resizer.dataset.resizer === "list";
     const target = isList ? listPane : navPane;
@@ -1147,6 +1392,14 @@
       event.preventDefault();
     }
   });
+  shareButton.addEventListener("click", () => void shareCurrentBrief());
+  shareCopyButton.addEventListener("click", async () => {
+    const copied = await copyShareLink();
+    const record = state.card ? shareByCard.get(state.card) : null;
+    if (record) showShareRecord(record, copied);
+  });
+  shareRevokeButton.addEventListener("click", () => void revokeCurrentShare());
+  shareCloseButton.addEventListener("click", hideShareResult);
   phoneInboxButton.addEventListener("click", showPhoneInbox);
   sendButton.addEventListener("click", () => void fileRuling());
   ribbonSendButton.addEventListener("click", () => void fileRuling());

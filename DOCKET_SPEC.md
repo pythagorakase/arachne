@@ -33,6 +33,25 @@ A v2 brief is a self-contained argument **plus its own capture `<form>`**:
   `<script data-arachne-brief-agent>` immediately before `</body>`.
 - Keep the page self-contained. It executes in the opaque iframe sandbox
   `sandbox="allow-scripts"`.
+- Supply an LLM-readable equivalent for every substantive visual. A
+  `<figure>`, `<img>`, `<canvas>`, `<audio>`, `<video>`, `<svg role="img">`, or
+  custom region marked `data-arachne-visual` must contain or carry
+  `data-arachne-llm-alt`. Complex and interactive media use inert semantic
+  content:
+
+  ```html
+  <figure data-arachne-visual>
+    <!-- human-facing chart or simulator -->
+    <template data-arachne-llm-alt>
+      <p>Describe the values, relationships, selectable states, and conclusion.</p>
+    </template>
+  </figure>
+  ```
+
+  An ordinary image may use a non-empty `alt="…"`; a simple custom visual may
+  use `data-arachne-llm-alt="…"` directly. Pure decoration is marked
+  `aria-hidden="true"`. Publication fails when a substantive visual has no
+  equivalent or when the equivalent contains executable/form content.
 
 There is no sidecar axis schema and no manifest endpoint. The publication
 contract rejects legacy `/ruling` and `localStorage` references in brief HTML.
@@ -114,7 +133,29 @@ other control.
 - The locked shell discloses neither brief metadata nor the authenticated
   inbox client.
 
-## 7. Out of scope
+## 7. Public semantic snapshots
+
+Share is a chrome-owned action, independent of ruling capture. One click sends
+only the selected published page name to authenticated `POST /shares`; it
+never sends the device's current draft or form state. The server parses the
+stored page into one canonical semantic tree and derives both formats from it:
+
+- public HTML at `/s/<192-bit-capability>`;
+- equivalent Markdown at `/s/<192-bit-capability>.md`;
+- every option label and explanation, prose block, list, table, code block,
+  caption, and `data-arachne-llm-alt` equivalent preserved; and
+- scripts, authored styles, live controls, submission affordances, cookies,
+  and browser storage absent.
+
+The authenticated server creates and revokes records in the owner-only share
+store. A separate loopback `share_server.py` process can be placed behind a
+public hostname; it knows no owner token and serves only exact live capability
+paths. Links expire server-side after exactly 30 days, can be revoked sooner,
+use `no-store`/`noindex` and a sandboxing CSP, and return the same 404 for an
+unknown, expired, or revoked capability. The interactive Arachne origin stays
+tailnet-only.
+
+## 8. Out of scope
 
 - Changes to `/ruling` acceptance, `RulingStore`, `/wait`, cursor semantics, or
   MCP consumption.

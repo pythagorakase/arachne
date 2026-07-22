@@ -6,10 +6,13 @@
 > MacBook-bridge and seedbox sections below are retained as the historical
 > runbook and for teardown reference.
 
-How to make Arachne always-on and reachable from the owner's devices,
-tailnet-only. The durable deployment is the Ubuntu host `cairn`; the MacBook
-bridge is retained only as rollback state. The older Whatbox procedure remains
-below as a shared-host reference, but is not part of the current deployment.
+How to make Arachne's interactive application always-on and reachable from the
+owner's devices, tailnet-only. The optional public snapshot origin is a separate
+loopback process with its own narrowly scoped tunnel; it never exposes the
+inbox or application server. The durable deployment is the Ubuntu host `cairn`;
+the MacBook bridge is retained only as rollback state. The older Whatbox
+procedure remains below as a shared-host reference, but is not part of the
+current deployment.
 
 Commands are **illustrative examples** — the supervision mechanism especially
 is the implementer's choice (see [`SPEC.md`](./SPEC.md) §5). What's fixed are
@@ -340,8 +343,9 @@ destination behind an existing cursor can therefore suppress several wakes.
 - Install the checkout and a destination-specific `deployment.env`; do not copy
   the seedbox file unchanged. Point data, runtime, pages, Python, and TLS paths
   at real `cairn` locations.
-- Install `uv`, run `uv sync --frozen`, and install the two checked-in user
-  units from `deploy/systemd/`. Start the core before the MCP adapter.
+- Install `uv`, run `uv sync --frozen`, and install the three checked-in user
+  units from `deploy/systemd/`. Start the core before the MCP adapter; the
+  isolated share server can start independently.
   **Run every `uv` command as the service user, never via `sudo`.** uv installs
   by hardlinking from `~/.cache/uv`; one root-umask invocation seeds the cache
   with root-owned mode-600 blobs, and later user-level syncs hardlink those
@@ -391,6 +395,9 @@ ARACHNE_PAGES_DIR=/home/OWNER/arachne/pages
 ARACHNE_TOKEN_FILE=/home/OWNER/.local/state/arachne/auth-token
 ARACHNE_PORT=8788
 ARACHNE_PYTHON=/home/OWNER/arachne/.venv/bin/python
+ARACHNE_SHARE_DIR=/home/OWNER/.local/state/arachne/shares
+ARACHNE_SHARE_PORT=8791
+ARACHNE_SHARE_PUBLIC_URL=https://share.pythagora.net
 ARACHNE_TLS_DIR=/home/OWNER/.local/state/arachne-tls
 ARACHNE_TLS_CERT_FILE=/home/OWNER/.local/state/arachne-tls/server-cert.pem
 ARACHNE_TLS_KEY_FILE=/home/OWNER/.local/state/arachne-tls/server-key.pem
@@ -409,14 +416,30 @@ TAILSCALE_BIN=/usr/bin/tailscale
 TAILSCALE_SOCKET=/var/run/tailscale/tailscaled.sock
 ```
 
+Install and enable the user services after the owner-only environment file is
+in place:
+
+```bash
+mkdir -p ~/.config/systemd/user
+install -m 0644 ~/arachne/deploy/systemd/arachne.service \
+  ~/arachne/deploy/systemd/arachne-mcp.service \
+  ~/arachne/deploy/systemd/arachne-share.service \
+  ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now arachne.service arachne-share.service
+systemctl --user enable --now arachne-mcp.service
+```
+
 The same `sys.executable` resolution applies in system-daemon mode, including
 virtual environments and distribution-provided Python wrappers.
 
 System mode never launches or stops `tailscaled`; Ubuntu owns that lifecycle.
 The operator setting permits the unprivileged watchdog to inspect the system
 daemon and configure Serve through its socket. The MCP unit keeps no durable
-cursor database; `ARACHNE_DATA_DIR`, `ARACHNE_PAGES_DIR`, and the external
-client cursor are the continuity boundary.
+cursor database; `ARACHNE_DATA_DIR` (including `shares/`),
+`ARACHNE_PAGES_DIR`, and the external client cursor are the continuity
+boundary. Preserve `shares/` when existing public links should survive a host
+migration; omitting it intentionally invalidates every outstanding link.
 
 ### 2. Warm-copy, then quiesce the source
 
@@ -686,6 +709,107 @@ From an off-tailnet network (phone with Tailscale toggled off), the name must
 not connect at all; a public scan of `cairn`'s internet-facing address must
 show no new open port. On-tailnet, an unauthenticated `GET /` returns the
 friendly locked shell and names nothing.
+
+## Public snapshot origin (`share.pythagora.net`)
+
+This is the deliberate exception to the application's tailnet-only exposure:
+an unguessable share URL should work for an external LLM. Keep the exception
+narrow. `arachne.pythagora.net` remains DNS-only and tailnet-only; the public
+hostname uses a different Cloudflare Tunnel whose sole local target is the
+read-only snapshot listener on `127.0.0.1:8791`.
+
+`share_server.py` reads only the owner-controlled `shares/` directory. It has
+no owner token, session implementation, page directory, ruling store, MCP
+route, or generic reverse-proxy route. It serves `GET`/`HEAD /health`, exact
+live `/s/<capability>` and `/s/<capability>.md` paths, and nothing else. The
+capability itself is bearer-like: anyone who receives it can read that one
+snapshot until its 30-day server-side expiry or earlier revocation.
+
+### 1. Prove the isolated local listener
+
+With the three share variables from the `cairn` environment example above,
+start the checked-in user unit and confirm that it binds only IPv4 loopback:
+
+```bash
+systemctl --user restart arachne.service arachne-share.service
+curl --fail http://127.0.0.1:8791/health
+ss -tlnp | grep '127.0.0.1:8791'
+```
+
+Do not point Tailscale Serve, Caddy, or any public proxy at this port. It is a
+separate public-origin backend, not another way into the app.
+
+### 2. Create one locally managed Cloudflare Tunnel
+
+Install `cloudflared`, authenticate it to the `pythagora.net` account, and
+create a tunnel dedicated to Arachne snapshots. These commands create
+Cloudflare account/DNS state, so run them only under the intended account:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create arachne-share
+cloudflared tunnel route dns arachne-share share.pythagora.net
+```
+
+Copy `deploy/cloudflared/share-config.yml.in` to an owner-only working file and
+replace `@@TUNNEL_UUID@@` and `@@TUNNEL_CREDENTIALS_FILE@@` with the values
+printed by `tunnel create`. Its ingress list must retain the final catch-all
+404 rule. Validate routing before installing the service:
+
+```bash
+cloudflared tunnel --config ./share-config.yml ingress validate
+cloudflared tunnel --config ./share-config.yml ingress rule \
+  https://share.pythagora.net/s/test
+```
+
+For a root-managed Linux service, install the rendered configuration and tunnel
+credential under `/etc/cloudflared/` with root-only permissions, validate that
+exact file, then install/start the service with the config path supplied
+explicitly:
+
+```bash
+sudo install -d -m 0700 /etc/cloudflared
+sudo install -m 0600 share-config.yml /etc/cloudflared/config.yml
+sudo install -m 0600 '<TUNNEL-UUID>.json' \
+  /etc/cloudflared/<TUNNEL-UUID>.json
+sudo cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
+sudo cloudflared --config /etc/cloudflared/config.yml service install
+sudo systemctl enable --now cloudflared
+```
+
+The credentials path inside `/etc/cloudflared/config.yml` must name the copied
+`/etc/cloudflared/<TUNNEL-UUID>.json`, not the owner's original home-directory
+path. Cloudflare's locally managed configuration requires the tunnel UUID,
+credential file, ingress rules, and final catch-all; supplying `--config`
+explicitly avoids `sudo` changing which home directory is searched. See the
+[configuration-file reference](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/configuration-file/)
+and [Linux service instructions](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/as-a-service/linux/).
+The connector establishes outbound-only connections, so no new inbound router
+or firewall port is required.
+
+### 3. Verify the public negative boundary
+
+First create a share from the authenticated inbox. Then test its HTML and
+Markdown URLs from an off-tailnet device, followed by the negative routes:
+
+```bash
+curl --fail https://share.pythagora.net/health
+curl --fail 'https://share.pythagora.net/s/<capability>'
+curl --fail 'https://share.pythagora.net/s/<capability>.md'
+
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  https://share.pythagora.net/)" = 404
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  'https://share.pythagora.net/rulings?since=0')" = 404
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  https://share.pythagora.net/decision_example.html)" = 404
+```
+
+Revoke the test share in Arachne and confirm that both its HTML and Markdown
+paths become 404 immediately. Also confirm that `cloudflared` has no ingress
+rule targeting private ports 8788 or 8790, and that neither of those ports has
+become reachable off-tailnet. Unknown, expired, and revoked capability paths
+must remain indistinguishable.
 
 ## Teardown
 

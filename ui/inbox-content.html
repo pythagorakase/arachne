@@ -47,12 +47,36 @@
           aria-label="Previous awaiting brief" data-brief-previous>‹</button>
         <button type="button" title="Next awaiting brief"
           aria-label="Next awaiting brief" data-brief-next>›</button>
+        <button type="button" title="Create and copy a 30-day public link"
+          aria-label="Create and copy a 30-day public link" data-share-brief
+          disabled><span aria-hidden="true">↗</span><span
+            class="share-button-label">SHARE</span></button>
         <a title="Open full page" aria-label="Open selected brief as a full page"
           target="_blank" rel="noopener" data-brief-expand aria-disabled="true">
           <span aria-hidden="true">⤢</span><span class="full-page-label">FULL PAGE</span>
         </a>
       </nav>
     </header>
+    <section class="share-result" aria-label="Public share" aria-live="polite"
+      data-share-result hidden>
+      <div class="share-result-heading">
+        <strong data-share-status>Public link ready</strong>
+        <button type="button" class="share-close" aria-label="Close public link"
+          data-share-close>×</button>
+      </div>
+      <p data-share-expiry></p>
+      <div class="share-link-row">
+        <input type="text" readonly aria-label="Public Arachne link"
+          data-share-link>
+        <button type="button" data-share-copy>COPY</button>
+      </div>
+      <div class="share-actions">
+        <a target="_blank" rel="noopener noreferrer" data-share-markdown>
+          OPEN MARKDOWN
+        </a>
+        <button type="button" data-share-revoke>REVOKE NOW</button>
+      </div>
+    </section>
     <div class="reading-stage">
       <iframe class="brief-frame" title="Selected decision brief"
         sandbox="allow-scripts" data-reading-frame hidden></iframe>
