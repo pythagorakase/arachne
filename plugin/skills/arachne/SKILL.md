@@ -5,9 +5,11 @@ description: Put a rich, interactive decision to the human via Arachne and get w
 
 # Arachne — Async Decision Loom (MCP Client Skill)
 
-Arachne is an always-on, tailnet-only server: the agent publishes a rich HTML
-decision page, the human rules from any device, and the ruling completes a
-pending tool call in this very session — no polling, no heartbeat management.
+Arachne's interactive application is always-on and tailnet-only: the agent
+publishes a rich HTML decision page, the human rules from any device, and the
+ruling completes a pending tool call in this very session — no polling, no
+heartbeat management. Optional public links are inert 30-day snapshots served
+by a separate process; they never expose the application origin.
 
 This plugin registers Arachne's shared MCP adapter as server `arachne`. Five
 tools (surfaced as `mcp__plugin_arachne_arachne__<tool>`):
@@ -86,8 +88,8 @@ losing one is not. Never hand-edit it otherwise.
 
 ## Page Contract
 
-The current v2 model is **argument plus brief-owned capture, with chrome-owned
-filing**:
+The current model is **argument plus brief-owned capture, chrome-owned filing,
+and a semantic public-share source**:
 
 - Make the brief self-contained. Inline all CSS, assets, and scripts; the page
   runs in an opaque `sandbox="allow-scripts"` iframe.
@@ -97,6 +99,15 @@ filing**:
   `data-decision="<stable-id>"`. `data-label="Human label"` is optional; without
   it the agent derives a label from the part's heading/text.
 - Put the issue token on `<html data-issue="…">` or `<body data-issue="…">`.
+- Give every substantive visual an LLM-readable text equivalent. A `<figure>`,
+  `<img>`, `<canvas>`, `<svg role="img">`, or custom interactive region marked
+  `data-arachne-visual` must have an LLM alternative. An ordinary image may
+  use a non-empty `alt="…"`; a simple custom visual may use
+  `data-arachne-llm-alt="…"` directly. Charts, diagrams, and simulations
+  should place semantic HTML in an inert descendant
+  `<template data-arachne-llm-alt>` describing the relevant values,
+  relationships, selectable states, and conclusion. Mark purely decorative
+  visuals `aria-hidden="true"` instead.
 - Immediately before `</body>`, add an inline
   `<script data-arachne-brief-agent>` whose body is the **verbatim, complete
   contents** of `ui/brief-agent.js`. Do not rewrite or externally load it.
@@ -118,6 +129,13 @@ be pasted; `examples/nav-capture-test.html` is the complete runnable example):
   <main>
     <h1>Choose the rollout</h1>
     <p>The argument and evidence belong here.</p>
+    <figure data-arachne-visual>
+      <!-- chart, diagram, or simulation -->
+      <template data-arachne-llm-alt>
+        <p>The pilot reaches one team. The broad rollout reaches all four
+        teams and requires twice the support capacity.</p>
+      </template>
+    </figure>
     <form>
       <section data-decision="scope" data-label="Rollout scope">
         <h2>Scope</h2>
@@ -137,6 +155,11 @@ The canonical agent serializes the named controls as opaque `form`, composes a
 readable default `markdown` record (or honors the brief's capture hooks), and
 reports completeness. The surrounding `<nav>` companion owns progress, local
 drafts, and the one-ruling Send operation.
+
+The inbox's Share control creates an inert snapshot from this semantic source.
+It never includes scripts, draft state, submission controls, cookies, or
+storage. The public HTML and `.md` forms contain the same information, and the
+capability expires automatically after 30 days.
 
 ## Gotchas
 

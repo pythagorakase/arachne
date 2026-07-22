@@ -33,7 +33,7 @@ LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 # Kept in step with the [project] version in pyproject.toml; the project is
 # not an installed distribution (tool.uv package = false), so the version
 # cannot be read from importlib metadata.
-ADAPTER_VERSION = "0.2.0"
+ADAPTER_VERSION = "0.3.0"
 
 
 def _required_url(name: str, value: str | None, *, public: bool = False) -> str:

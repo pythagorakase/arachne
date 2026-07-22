@@ -35,12 +35,14 @@ It must deliver three things a local prompt cannot offer together:
 These are correctness / safety / host-policy, not implementation taste. Do not
 relax them for convenience.
 
-- **Loopback bind only.** The application listens on `127.0.0.1`. It never binds
-  a public interface. All external reachability is delegated to the transport
-  (§6).
-- **Tailnet-only exposure.** Reach it via `tailscale serve` (private, inside the
-  tailnet, TLS). **Never `tailscale funnel`** and never a public reverse proxy —
-  that would make it a public service.
+- **Loopback bind only.** Every Arachne listener uses `127.0.0.1`; none binds a
+  public interface. All external reachability is delegated to narrowly scoped
+  transports (§6).
+- **Tailnet-only interactive application.** Reach the inbox, briefs, sessions,
+  rulings, publication, and waiters via `tailscale serve` (private, inside the
+  tailnet, TLS). **Never `tailscale funnel`** and never put `server.py` behind a
+  public reverse proxy. The only public surface is the separate inert-snapshot
+  origin described below; it cannot route to the interactive server.
 - **Authenticated proxy-to-app hop.** Tailscale Serve connects to Arachne over
   verified HTTPS using a private localhost CA. The Serve proxy trusts that CA;
   Arachne holds the corresponding server key and certificate. A different user
@@ -54,9 +56,16 @@ relax them for convenience.
   its half-life is re-issued for the full window, so a regularly used device
   never re-enrolls while an idle or lost one still ages out. The token is
   never embedded in published HTML. Expiry must be enforced by the server, not
-  only by the browser's cookie lifetime. Nothing may be reachable off the
-  tailnet. (This also keeps it clear of the one Whatbox AUP clause that bites
-  hosted services — "a public directory service with no authentication.")
+  only by the browser's cookie lifetime. No page, ruling, inbox datum, token,
+  draft, or waiter may be reachable off the tailnet. A snapshot becomes public
+  only through an explicit owner share action and contains inert semantic
+  content rather than application state.
+- **Capability-only public snapshots.** Public links use at least 192 random
+  bits, expire server-side after 30 days, and can be revoked sooner. Unknown,
+  expired, and revoked identifiers are indistinguishable. HTML and Markdown
+  are generated from one allowlisted semantic tree with no script, live form,
+  storage, cookie, or authenticated-resource access. The public process knows
+  no application token and serves no directory, page, ruling, or proxy route.
 - **No directory listing / no traversal.** Serve only an explicit allowlist of
   page files from the pages directory. Never expose a filesystem index or allow
   `..` escapes.
@@ -107,13 +116,17 @@ keep, but not mandated.)
   a new ruling is filed, the waiter returns that ruling's data and the agent's
   session resumes (§4). Must be race-free via a monotonic cursor or equivalent.
 - **Health signal.** Provide a cheap liveness/roll-up endpoint for supervision.
-- **Page authoring contract.** Pages POST their ruling to a **relative** endpoint
-  (same-origin — no CORS needed) and persist in-progress form state to
-  `localStorage` (so a phone can resume mid-answer). The existing NEXUS pages
-  (`nexus/temp/decision_*.html`) hardcode an absolute `127.0.0.1:8788` endpoint
-  today; switching them to a relative path is the one change needed at publish.
-  The surrounding server session supplies authentication, so page source never
-  carries the application token.
+- **Page authoring contract.** A trusted page owns its argument and capture
+  form, but the authenticated application chrome owns device-local drafts and
+  the relative `POST /ruling`. The page embeds the canonical capture agent and
+  must not reference `/ruling` or `localStorage` itself. Every substantive
+  visual supplies `data-arachne-llm-alt` semantic content (or is explicitly
+  decorative), so public snapshot generation cannot silently omit evidence.
+- **Semantic share.** An authenticated owner can create a public, read-only
+  snapshot of a published page without sharing current draft state. The action
+  returns equivalent HTML and Markdown capability URLs, an expiry, and a
+  content hash. Repeating or revoking the action never changes ruling/archive
+  semantics.
 
 ---
 
@@ -203,6 +216,11 @@ Sol owns these choices — pick what's cleanest:
 - Exposed **tailnet-only** via `tailscale serve`, TLS, at a stable MagicDNS name
   (`arachne.<tailnet>.ts.net`). Never `funnel`. The proxy target is verified
   HTTPS using a private localhost CA; an insecure HTTPS target is not allowed.
+- Public snapshots use a **different hostname and loopback target**. A public
+  reverse proxy or outbound tunnel may route `share.pythagora.net` only to
+  `share_server.py`; it must never have a route to `server.py`, the MCP adapter,
+  or their ports. The public process requires no inbound port when an
+  outbound-only tunnel is used.
 - A **custom domain may front the same service without changing the exposure
   invariant**: a DNS-only record (never a proxying CDN) pointing at the node's
   tailnet address, terminated by a TLS proxy **bound exclusively to tailnet
@@ -263,6 +281,11 @@ service.)*
 13. **Inbox bootstrap** — a bootstrap link minted without a page lands the
     device on the inbox; an inbox-bound ticket cannot unlock a page-bound
     session or vice versa; the ticket stays single-use.
+14. **Semantic sharing** — one authenticated action produces exact public HTML
+    and Markdown capability paths with the same prose, option explanations,
+    tables, and LLM visual equivalents; neither artifact contains script,
+    forms, drafts, or authenticated URLs. Both disappear at 30 days and
+    immediately after revocation, while every other public-server path is 404.
 
 ---
 

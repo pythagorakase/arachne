@@ -33,6 +33,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from page_contract import PAGE_NAME, publish_html, read_page_issue
+from share_store import SHARE_ID, Share, ShareStore
 from ui import (
     BOOTSTRAP_CSP,
     INBOX_CSP,
@@ -79,6 +80,9 @@ DECISION_PAGE_CSP = (
     "form-action 'self'; "
     "frame-src 'none'; "
     "frame-ancestors 'self'"
+)
+SHARE_REVOCATION_LOG_ID = re.compile(
+    r"(/shares/)[A-Za-z0-9_-]{32}(?=/revoke)"
 )
 
 
@@ -162,6 +166,34 @@ def _environment_bool(name: str, default: bool) -> bool:
     raise ValueError(f"{name} must be true or false, got {value!r}")
 
 
+def _optional_public_origin(name: str, value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    normalized = value.strip().rstrip("/")
+    parsed = urlsplit(normalized)
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{name} contains an invalid port") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(f"{name} must be an HTTP(S) origin without credentials")
+    if parsed.scheme != "https" and parsed.hostname not in {
+        "127.0.0.1",
+        "::1",
+        "localhost",
+    }:
+        raise ValueError(f"{name} must use HTTPS unless it is loopback-only")
+    return normalized
+
+
 def _page_issue(name: str) -> str:
     """Derive the issue token a page's rulings will carry.
 
@@ -197,6 +229,8 @@ class Config:
     secure_cookie: bool
     tls_cert_file: Path | None
     tls_key_file: Path | None
+    share_dir: Path | None = None
+    share_public_url: str | None = None
 
     @classmethod
     def from_environment(cls) -> "Config":
@@ -218,6 +252,7 @@ class Config:
         wait_text = os.environ.get("ARACHNE_WAIT_SECONDS", "540")
         tls_cert_text = os.environ.get("ARACHNE_TLS_CERT_FILE")
         tls_key_text = os.environ.get("ARACHNE_TLS_KEY_FILE")
+        share_dir_text = os.environ.get("ARACHNE_SHARE_DIR")
         if (tls_cert_text is None) != (tls_key_text is None):
             raise ValueError(
                 "ARACHNE_TLS_CERT_FILE and ARACHNE_TLS_KEY_FILE must be set together"
@@ -260,6 +295,15 @@ class Config:
                 Path(tls_key_text).expanduser().resolve()
                 if tls_key_text is not None
                 else None
+            ),
+            share_dir=(
+                Path(share_dir_text).expanduser().absolute()
+                if share_dir_text
+                else (data_dir / "shares").absolute()
+            ),
+            share_public_url=_optional_public_origin(
+                "ARACHNE_SHARE_PUBLIC_URL",
+                os.environ.get("ARACHNE_SHARE_PUBLIC_URL"),
             ),
         )
 
@@ -528,6 +572,7 @@ class ArachneServer(ThreadingHTTPServer):
         self.config = config
         self.store = store
         self.authentication = authentication
+        self.share_store = ShareStore(config.share_dir or config.data_dir / "shares")
         if (config.tls_cert_file is None) != (config.tls_key_file is None):
             raise RuntimeError("TLS certificate and private key must be configured together")
         tls_context: ssl.SSLContext | None = None
@@ -594,7 +639,8 @@ class ArachneHandler(BaseHTTPRequestHandler):
         return self.server  # type: ignore[return-value]
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        LOGGER.info("%s - %s", self.client_address[0], fmt % args)
+        message = SHARE_REVOCATION_LOG_ID.sub(r"\1<redacted>", fmt % args)
+        LOGGER.info("%s - %s", self.client_address[0], message)
 
     def _write(
         self,
@@ -1046,6 +1092,17 @@ class ArachneHandler(BaseHTTPRequestHandler):
             self._require_bearer_authentication()
             self._publish_page()
             return
+        if path == "/shares" and not parsed.query:
+            self._require_authentication()
+            self._create_share()
+            return
+        share_revoke = re.fullmatch(
+            r"/shares/([A-Za-z0-9_-]{32})/revoke", path
+        )
+        if share_revoke is not None and not parsed.query:
+            self._require_authentication()
+            self._revoke_share(share_revoke.group(1))
+            return
         if path != "/ruling" or parsed.query:
             raise ClientProblem(
                 HTTPStatus.NOT_FOUND, "not_found", "no such endpoint"
@@ -1095,6 +1152,91 @@ class ArachneHandler(BaseHTTPRequestHandler):
             }
         )
         self._json(HTTPStatus.CREATED, acknowledgement)
+
+    def _share_payload(self, share: Share, *, reused: bool) -> dict[str, Any]:
+        public_url = self.arachne.config.share_public_url
+        if public_url is None:
+            raise ClientProblem(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "sharing_unavailable",
+                "public sharing is not configured on this Arachne deployment",
+            )
+        path = f"/s/{share.share_id}"
+        return {
+            "id": share.share_id,
+            "url": f"{public_url}{path}",
+            "markdown_url": f"{public_url}{path}.md",
+            "created_at": share.created_at,
+            "expires_at": share.expires_at,
+            "content_sha256": share.content_sha256,
+            "reused": reused,
+        }
+
+    def _create_share(self) -> None:
+        if self.arachne.config.share_public_url is None:
+            raise ClientProblem(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "sharing_unavailable",
+                "public sharing is not configured on this Arachne deployment",
+            )
+        payload = self._read_json_payload("POST /shares", "share")
+        if not isinstance(payload, dict) or set(payload) != {"page"}:
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_share",
+                "the share request must contain only one published page name",
+            )
+        page = payload.get("page")
+        if not isinstance(page, str):
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_share",
+                "'page' must name a published decision page",
+            )
+        candidate = self._page_candidate(page)
+        try:
+            source = candidate.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ClientProblem(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "unshareable_page",
+                "the published decision page cannot be read as UTF-8",
+            ) from exc
+        issue = read_page_issue(self.arachne.config.pages_dir, page) or _page_issue(page)
+        try:
+            result = self.arachne.share_store.create_or_reuse(
+                page=page,
+                issue=issue,
+                source=source,
+            )
+        except ValueError as exc:
+            raise ClientProblem(
+                HTTPStatus.UNPROCESSABLE_ENTITY,
+                "unshareable_page",
+                str(exc),
+            ) from exc
+        status = HTTPStatus.OK if result.reused else HTTPStatus.CREATED
+        self._json(status, self._share_payload(result.share, reused=result.reused))
+
+    def _revoke_share(self, share_id: str) -> None:
+        if SHARE_ID.fullmatch(share_id) is None:
+            raise ClientProblem(
+                HTTPStatus.NOT_FOUND, "not_found", "no such live public share"
+            )
+        payload = self._read_json_payload(
+            f"POST /shares/{share_id}/revoke", "share revocation"
+        )
+        if payload != {}:
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_share_revocation",
+                "the share revocation body must be an empty JSON object",
+            )
+        if not self.arachne.share_store.revoke(share_id):
+            raise ClientProblem(
+                HTTPStatus.NOT_FOUND, "not_found", "no such live public share"
+            )
+        self._write(HTTPStatus.NO_CONTENT)
 
     def _issue_bootstrap_ticket(self) -> None:
         payload = self._read_json_payload(

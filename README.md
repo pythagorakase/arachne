@@ -36,6 +36,12 @@ Three properties a local `AskUserQuestion` can't offer at once:
    │   POST /ruling ─notify→ threading.Condition ─release→ GET /wait  │
    │   pages/decision_*.html       ~/.local/state/arachne/rulings/    │
    └─────────────────────────────────────────────────────────────────┘
+
+[external LLM or reader] → https://share.pythagora.net/s/<capability>
+                                   │ public proxy/tunnel → 127.0.0.1:8791
+                                   ▼
+                      share_server.py → owner-only shares/
+                      (HTML/Markdown snapshots only; no app token)
 ```
 
 The server binds **loopback only**. Remote reachability comes entirely from
@@ -97,15 +103,37 @@ iPadOS, Tailscale's [VPN On Demand](https://tailscale.com/docs/features/client/i
 can automatically connect for `*.ts.net` hostnames so opening the icon does not
 require opening Tailscale first.
 
+### Share a decision with another LLM
+
+Select a brief and press **Share** in the reading toolbar. Arachne immediately
+creates and copies an unguessable public HTML link—there is no confirmation
+step. The result panel also exposes the equivalent `.md` link and a one-click
+revoke action. A live link expires automatically 30 days after creation.
+
+The share is a snapshot of the authored decision, not your private working
+state. It preserves the argument, evidence, lists, tables, code, every option's
+label and explanation, and each visual's required `data-arachne-llm-alt` text.
+It contains no script, live controls, draft selections, submission path,
+cookies, or browser storage. HTML and Markdown are serialized from the same
+canonical semantic tree and carry the same content hash.
+
+The interactive application remains tailnet-only. `server.py` writes snapshots
+to the owner-only share store; the separately supervised `share_server.py`
+knows no application token and serves only exact `/s/<capability>` and
+`/s/<capability>.md` paths. A public proxy or outbound tunnel must target only
+that second loopback process.
+
 ## Security & host-policy posture
 
-- **No public surface.** Nothing listens on the host's public interface;
-  `tailscale serve` (never `funnel`) keeps it inside the tailnet.
-- **Authenticated at both boundaries.** Tailscale authenticates remote devices;
-  the application token prevents another account on the shared host from using
-  host-wide loopback to read pages, read rulings, or forge one. Private-CA TLS
-  prevents a different process on that host from impersonating the loopback
-  backend to Tailscale Serve. It is neither public nor unauthenticated.
+- **No public application surface.** The inbox, briefs, rulings, waiters, MCP,
+  and owner APIs remain behind `tailscale serve` (never Funnel). The separate
+  public origin serves only explicitly created inert capability snapshots.
+- **Private application authenticated at both boundaries.** Tailscale
+  authenticates remote devices; the application token prevents another account
+  on the shared host from using host-wide loopback to read pages, read rulings,
+  or forge one. Private-CA TLS prevents a different process on that host from
+  impersonating the loopback backend to Tailscale Serve. Public snapshots are
+  separately authorized by their unguessable, expiring capability paths.
 - **Published pages are privileged code.** Only publish decision HTML from a
   trusted source. A server-supplied Content Security Policy restricts remote
   active content, framing, base URLs, and network connections, but it is defense
@@ -128,6 +156,9 @@ arachne/
   DEPLOY.md        ← portable host + Tailscale deployment and migration runbook
   MCP.md           ← shared MCP tools, authentication, and client setup
   server.py        ← the server (created by the implementer, per SPEC)
+  share_server.py  ← isolated public origin for inert capability snapshots
+  share_store.py   ← owner-only 30-day snapshot storage and revocation
+  semantic_snapshot.py ← shared HTML/Markdown semantic serializer
   ui/              ← importable inbox/bootstrap HTML, CSS, and render boundary
   mcp_server.py    ← authenticated Streamable HTTP MCP adapter
   page_contract.py ← shared validation and atomic publication boundary
@@ -148,14 +179,18 @@ boundary. Import that folder when iterating in a design tool. Per-decision HTML
 stays in `pages/` because it is published runtime content rather than the shared
 application shell.
 
-Rulings, the generated authentication token, and wake cursors live outside the
-repository by default under `~/.local/state/arachne/`. Production can set
-`ARACHNE_DATA_DIR` or `ARACHNE_TOKEN_FILE` explicitly.
+Rulings, public snapshot records, the generated authentication token, and wake
+cursors live outside the repository by default under
+`~/.local/state/arachne/`. Production can set `ARACHNE_DATA_DIR`,
+`ARACHNE_SHARE_DIR`, or `ARACHNE_TOKEN_FILE` explicitly.
 
 ## Quickstart (local, no Tailscale — proves the wake loop)
 
 ```bash
-ARACHNE_SECURE_COOKIE=false python3 server.py # local HTTP only; production stays Secure
+ARACHNE_SECURE_COOKIE=false \
+  ARACHNE_SHARE_PUBLIC_URL=http://127.0.0.1:8791 python3 server.py
+# Optional second terminal: exercise public snapshots locally.
+ARACHNE_SHARE_PORT=8791 python3 share_server.py
 # in another shell, arm the wake:
 ARACHNE_URL=http://127.0.0.1:8788 bin/arm-wake.sh &
 # bootstrap the browser once, then submit:

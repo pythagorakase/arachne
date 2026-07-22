@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
@@ -27,10 +28,17 @@ def free_port() -> int:
 
 
 class RunningArachne:
-    def __init__(self, pages: Path, data: Path, wait_seconds: float = 0.5) -> None:
+    def __init__(
+        self,
+        pages: Path,
+        data: Path,
+        wait_seconds: float = 0.5,
+        share_public_url: str | None = None,
+    ) -> None:
         self.pages = pages
         self.data = data
         self.wait_seconds = wait_seconds
+        self.share_public_url = share_public_url
         self.port = free_port()
         self.process: subprocess.Popen[str] | None = None
 
@@ -58,6 +66,8 @@ class RunningArachne:
                 "ARACHNE_SECURE_COOKIE": "true",
             }
         )
+        if self.share_public_url is not None:
+            environment["ARACHNE_SHARE_PUBLIC_URL"] = self.share_public_url
         self.process = subprocess.Popen(
             [sys.executable, str(REPO / "server.py")],
             cwd=REPO,
@@ -166,7 +176,11 @@ class ArachneEndToEndTests(unittest.TestCase):
             "<!doctype html><title>Arachne test</title><h1>Choose</h1>",
             encoding="utf-8",
         )
-        self.service = RunningArachne(self.pages, self.data)
+        self.service = RunningArachne(
+            self.pages,
+            self.data,
+            share_public_url="https://share.example",
+        )
         self.service.start()
 
     def tearDown(self) -> None:
@@ -219,6 +233,18 @@ class ArachneEndToEndTests(unittest.TestCase):
             ),
             Request(
                 f"{self.service.url}/ruling",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            ),
+            Request(
+                f"{self.service.url}/shares",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            ),
+            Request(
+                f"{self.service.url}/shares/{'A' * 32}/revoke",
                 data=b"{}",
                 headers={"Content-Type": "application/json"},
                 method="POST",
@@ -295,6 +321,20 @@ class ArachneEndToEndTests(unittest.TestCase):
             acknowledgement["artifacts"]["markdown"],
         )
         self.assertEqual(acknowledgement["issue"], "browser-cookie")
+
+        share_body = json.dumps({"page": "decision_476.html"}).encode()
+        request = Request(
+            f"{self.service.url}/shares",
+            data=share_body,
+            headers={"Content-Type": "application/json", "Cookie": cookie},
+            method="POST",
+        )
+        with urlopen(request, timeout=1) as response:
+            self.assertEqual(response.status, 201)
+            public_share = json.load(response)
+        self.assertTrue(public_share["url"].startswith("https://share.example/s/"))
+        self.assertEqual(public_share["markdown_url"], public_share["url"] + ".md")
+        self.assertNotIn(self.service.token, json.dumps(public_share))
 
         for path, payload in (
             ("/pages", {"name": "decision_cookie.html", "html": "ignored"}),
@@ -379,6 +419,76 @@ class ArachneEndToEndTests(unittest.TestCase):
             )
         self.assertEqual(invalid_page.exception.code, 400)
         self.assertFalse((self.pages / "decision_invalid.html").exists())
+
+    def test_public_share_creation_reuse_rejection_and_revocation(self) -> None:
+        status, share = post_json(
+            self.service.url,
+            "/shares",
+            self.service.token,
+            {"page": "decision_476.html"},
+        )
+        self.assertEqual(status, 201)
+        self.assertFalse(share["reused"])
+        self.assertRegex(share["id"], r"\A[A-Za-z0-9_-]{32}\Z")
+        self.assertEqual(share["url"], f"https://share.example/s/{share['id']}")
+        self.assertEqual(share["markdown_url"], share["url"] + ".md")
+        created = datetime.fromisoformat(share["created_at"].replace("Z", "+00:00"))
+        expires = datetime.fromisoformat(share["expires_at"].replace("Z", "+00:00"))
+        self.assertEqual((expires - created).total_seconds(), 30 * 24 * 60 * 60)
+        self.assertTrue((self.data / "shares" / share["id"] / "snapshot.html").is_file())
+        self.assertTrue((self.data / "shares" / share["id"] / "snapshot.md").is_file())
+
+        status, reused = post_json(
+            self.service.url,
+            "/shares",
+            self.service.token,
+            {"page": "decision_476.html"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(reused["reused"])
+        self.assertEqual(reused["id"], share["id"])
+
+        legacy = self.pages / "decision_legacy_visual.html"
+        legacy.write_text(
+            '<!doctype html><title>Legacy</title><main><figure><svg role="img"></svg></figure></main>',
+            encoding="utf-8",
+        )
+        with self.assertRaises(HTTPError) as unshareable:
+            post_json(
+                self.service.url,
+                "/shares",
+                self.service.token,
+                {"page": legacy.name},
+            )
+        self.assertEqual(unshareable.exception.code, 422)
+        problem = json.load(unshareable.exception)
+        self.assertEqual(problem["error"], "unshareable_page")
+        self.assertIn("data-arachne-llm-alt", problem["detail"])
+
+        for headers in ({}, bearer(self.service.token)):
+            with self.subTest(headers=headers), self.assertRaises(HTTPError) as private:
+                urlopen(
+                    Request(f"{self.service.url}/s/{share['id']}", headers=headers),
+                    timeout=1,
+                )
+            self.assertIn(private.exception.code, {401, 404})
+
+        status, body = post_json(
+            self.service.url,
+            f"/shares/{share['id']}/revoke",
+            self.service.token,
+            {},
+        )
+        self.assertEqual(status, 204)
+        self.assertEqual(body, {})
+        with self.assertRaises(HTTPError) as already_revoked:
+            post_json(
+                self.service.url,
+                f"/shares/{share['id']}/revoke",
+                self.service.token,
+                {},
+            )
+        self.assertEqual(already_revoked.exception.code, 404)
 
     def test_axis_manifest_endpoint_is_gone_and_page_csp_is_unchanged(self) -> None:
         name = "decision_parts.html"

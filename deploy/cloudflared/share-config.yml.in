@@ -1,0 +1,11 @@
+# Public ingress for inert Arachne snapshots only.
+#
+# Keep the authenticated decision server on Tailscale Serve. This tunnel may
+# point only at share_server.py's loopback port.
+tunnel: @@TUNNEL_UUID@@
+credentials-file: @@TUNNEL_CREDENTIALS_FILE@@
+
+ingress:
+  - hostname: share.pythagora.net
+    service: http://127.0.0.1:8791
+  - service: http_status:404
