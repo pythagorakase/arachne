@@ -556,6 +556,7 @@ class ArachneEndToEndTests(unittest.TestCase):
             "font-src 'self'",
             "img-src 'self'",
             "manifest-src 'self'",
+            "worker-src 'self'",
             "object-src 'none'",
             "base-uri 'none'",
             "frame-ancestors 'none'",
@@ -646,6 +647,27 @@ class ArachneEndToEndTests(unittest.TestCase):
                 self.assertEqual(body[:8], b"\x89PNG\r\n\x1a\n")
                 self.assertEqual(int.from_bytes(body[16:20], "big"), size)
                 self.assertEqual(int.from_bytes(body[20:24], "big"), size)
+
+        for path, content_type, marker in (
+            (
+                "/service-worker.js",
+                "text/javascript; charset=utf-8",
+                b'const OFFLINE_URL = "/offline.html"',
+            ),
+            (
+                "/offline.html",
+                "text/html; charset=utf-8",
+                b"Cannot reach the loom",
+            ),
+        ):
+            with self.subTest(path=path), urlopen(
+                f"{self.service.url}{path}", timeout=1
+            ) as response:
+                body = response.read()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers["Content-Type"], content_type)
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                self.assertIn(marker, body)
 
         for path in (
             "/ui/icons/arachne-icon.svg",

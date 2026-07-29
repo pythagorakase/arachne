@@ -9,7 +9,9 @@ remain under `pages/`; they are not part of Arachne's shared application shell.
 - `inbox.css` owns the desktop three-pane, tablet two-pane, phone drill-in,
   safe-area, and ruling-ribbon visual system.
 - `manifest.webmanifest` and `icons/` provide the allowlisted Home Screen app
-  identity. Only the manifest and three rendered PNG sizes are public.
+  identity. `app-boot.js`, `service-worker.js`, and `offline.html` install a
+  root-navigation fallback that caches only generic Tailscale connection help.
+  The manifest, three rendered PNG sizes, worker, and help page are public.
 - `inbox.js` owns client-side selection, pane resizing, the decision `<nav>`,
   per-issue drafts, mediated filing, and the chrome side of the brief message
   protocol; the renderer inlines it.
@@ -29,8 +31,10 @@ remain under `pages/`; they are not part of Arachne's shared application shell.
 Keep every `@@ARACHNE_*@@` slot present exactly once in its file. The renderer
 fails at startup or render time if that contract drifts. Inbox CSS and JS are
 inlined into the authenticated response. The fixed font allowlist remains
-authenticated; only the non-sensitive manifest and exact PNG icon allowlist
-are public static routes.
+authenticated; only the non-sensitive manifest, exact PNG icon allowlist,
+service worker, and generic offline help are public static routes. The worker
+must never cache an inbox response, decision page, ruling, draft, credential,
+or enrollment link.
 
 `examples/nav-capture-test.html` embeds the canonical agent and exercises
 radio, multi-value checkbox, and textarea capture without a manifest.

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#080b12">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'">
+<title>Arachne — connection needed</title>
+<style>
+:root {
+  color-scheme: dark;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #06090e;
+  color: #e7e3d8;
+}
+* { box-sizing: border-box; }
+body {
+  min-height: 100svh;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  padding:
+    max(28px, env(safe-area-inset-top))
+    max(24px, env(safe-area-inset-right))
+    max(28px, env(safe-area-inset-bottom))
+    max(24px, env(safe-area-inset-left));
+  background:
+    radial-gradient(circle at 50% 20%, #14202d 0, transparent 42%),
+    #06090e;
+}
+main {
+  width: min(34rem, 100%);
+  border: 1px solid #354150;
+  border-radius: 16px;
+  padding: clamp(24px, 6vw, 42px);
+  background: rgb(10 15 23 / 92%);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 45%);
+}
+.brand {
+  margin: 0 0 24px;
+  color: #d3ad64;
+  font-size: .78rem;
+  font-weight: 700;
+  letter-spacing: .24em;
+}
+h1 {
+  margin: 0 0 14px;
+  font-family: ui-serif, Georgia, serif;
+  font-size: clamp(1.8rem, 7vw, 2.7rem);
+  font-weight: 600;
+  line-height: 1.08;
+}
+p {
+  margin: 0 0 14px;
+  color: #b7c0ca;
+  font-size: 1rem;
+  line-height: 1.55;
+}
+ol {
+  margin: 20px 0 26px;
+  padding-left: 1.35rem;
+  color: #d5d9de;
+  line-height: 1.65;
+}
+a {
+  display: inline-block;
+  border: 1px solid #b88b41;
+  border-radius: 8px;
+  padding: 12px 18px;
+  background: #8f672e;
+  color: #fff8e8;
+  font-size: .82rem;
+  font-weight: 750;
+  letter-spacing: .12em;
+  text-decoration: none;
+}
+.privacy {
+  margin: 22px 0 0;
+  color: #74808d;
+  font-size: .78rem;
+}
+</style>
+</head>
+<body>
+<main>
+  <p class="brand">ARACHNE · DECISION LOOM</p>
+  <h1>Cannot reach the loom</h1>
+  <p>Arachne needs a live Tailscale connection. No decision data is cached on this screen.</p>
+  <ol>
+    <li>Open Tailscale on this device.</li>
+    <li>Confirm you are signed in and the tailnet is connected.</li>
+    <li>Return here and try again.</li>
+  </ol>
+  <a href="/">TRY AGAIN</a>
+  <p class="privacy">If Tailscale asks you to authenticate, complete that step before retrying.</p>
+</main>
+</body>
+</html>

@@ -97,11 +97,16 @@ enough for its fifteen-day session to lapse, ask the agent for a no-argument
 into the locked screen. The installed app accepts only a same-origin,
 inbox-bound ticket; it never accepts or stores the durable application token.
 
-Arachne deliberately has no service worker, offline cache, notifications, or
-badge. It needs the live tailnet service to read or file a ruling. On iOS and
-iPadOS, Tailscale's [VPN On Demand](https://tailscale.com/docs/features/client/ios-vpn-on-demand)
+Arachne needs the live tailnet service to read or file a ruling. Its narrowly
+scoped service worker caches only a generic connection-help screen: it never
+caches the inbox, briefs, rulings, drafts, credentials, or enrollment links.
+If the Home Screen app cannot reach `/` within seven seconds, it explains how
+to check that Tailscale is connected and still signed in instead of leaving an
+empty launch screen. On iOS and iPadOS, Tailscale's
+[VPN On Demand](https://tailscale.com/docs/features/client/ios-vpn-on-demand)
 can automatically connect for `*.ts.net` hostnames so opening the icon does not
-require opening Tailscale first.
+require opening Tailscale first. VPN On Demand cannot repair an expired login;
+reauthenticate in the Tailscale app when it asks.
 
 ### Share a decision with another LLM
 

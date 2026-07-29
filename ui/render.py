@@ -23,6 +23,7 @@ INBOX_CSP = (
     "connect-src 'self'; "
     "frame-src 'self'; "
     "manifest-src 'self'; "
+    "worker-src 'self'; "
     "object-src 'none'; "
     "base-uri 'none'; "
     "form-action 'none'; "
@@ -54,6 +55,7 @@ _LOCKED_TEMPLATE = _load_asset("locked.html")
 _BOOTSTRAP_TEMPLATE = _load_asset("bootstrap.html")
 _INBOX_STYLE = _load_asset("inbox.css").strip()
 _INBOX_SCRIPT = _load_asset("inbox.js").strip()
+_APP_BOOT_SCRIPT = _load_asset("app-boot.js").strip()
 _LOCKED_SCRIPT = _load_asset("locked.js").strip()
 _FONT_ASSETS = frozenset(
     {
@@ -82,6 +84,14 @@ _PUBLIC_APP_ASSETS = {
     "/ui/icons/arachne-512.png": (
         _ASSET_DIR / "icons" / "arachne-512.png",
         "image/png",
+    ),
+    "/service-worker.js": (
+        _ASSET_DIR / "service-worker.js",
+        "text/javascript; charset=utf-8",
+    ),
+    "/offline.html": (
+        _ASSET_DIR / "offline.html",
+        "text/html; charset=utf-8",
     ),
 }
 
@@ -190,6 +200,7 @@ def _inbox_document(main_html: str, script: str = "") -> bytes:
         {
             "@@ARACHNE_INBOX_STYLE@@": _INBOX_STYLE,
             "@@ARACHNE_INBOX_MAIN@@": main_html,
+            "@@ARACHNE_APP_BOOT_SCRIPT@@": _APP_BOOT_SCRIPT,
             "@@ARACHNE_INBOX_SCRIPT@@": script,
         },
     )

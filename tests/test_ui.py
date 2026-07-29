@@ -28,6 +28,7 @@ class UiStructureTests(unittest.TestCase):
         expected_assets = {
             "README.md",
             "__init__.py",
+            "app-boot.js",
             "bootstrap.html",
             "brief-agent.js",
             "brief.html",
@@ -39,7 +40,9 @@ class UiStructureTests(unittest.TestCase):
             "locked.html",
             "locked.js",
             "manifest.webmanifest",
+            "offline.html",
             "render.py",
+            "service-worker.js",
         }
         actual_assets = {path.name for path in UI.iterdir() if path.is_file()}
         self.assertTrue(expected_assets <= actual_assets)
@@ -112,6 +115,10 @@ class UiStructureTests(unittest.TestCase):
         self.assertIn('rel="manifest" href="/manifest.webmanifest"', rendered)
         self.assertIn("viewport-fit=cover", rendered)
         self.assertIn('rel="apple-touch-icon" sizes="180x180"', rendered)
+        self.assertIn(
+            'serviceWorker.register("/service-worker.js", {scope: "/"})',
+            rendered,
+        )
         self.assertIn("arachne:draft:v3:", rendered)
         self.assertIn('fetch("/ruling"', rendered)
         self.assertIn("data-share-brief", rendered)
@@ -211,6 +218,22 @@ class UiStructureTests(unittest.TestCase):
                 self.assertEqual(int.from_bytes(body[16:20], "big"), size)
                 self.assertEqual(int.from_bytes(body[20:24], "big"), size)
 
+        worker_record = public_app_asset("/service-worker.js")
+        self.assertIsNotNone(worker_record)
+        assert worker_record is not None
+        worker, worker_type = worker_record
+        self.assertEqual(worker_type, "text/javascript; charset=utf-8")
+        self.assertIn(b'const OFFLINE_URL = "/offline.html"', worker)
+        self.assertNotIn(b'cache.add("/")', worker)
+
+        offline_record = public_app_asset("/offline.html")
+        self.assertIsNotNone(offline_record)
+        assert offline_record is not None
+        offline, offline_type = offline_record
+        self.assertEqual(offline_type, "text/html; charset=utf-8")
+        self.assertIn(b"Cannot reach the loom", offline)
+        self.assertIn(b"No decision data is cached", offline)
+
         self.assertIsNone(public_app_asset("/ui/icons/arachne-icon.svg"))
         self.assertIsNone(public_app_asset("/ui/icons/unknown.png"))
 
@@ -248,6 +271,10 @@ class UiStructureTests(unittest.TestCase):
         self.assertIn('fetch("/session"', rendered)
         self.assertIn('JSON.stringify({ticket, page: "/"})', rendered)
         self.assertIn("not a link to an individual decision", rendered)
+        self.assertIn(
+            'serviceWorker.register("/service-worker.js", {scope: "/"})',
+            rendered,
+        )
         self.assertNotIn("Awaiting ruling", rendered)
         self.assertNotIn("data-arachne-shell", rendered)
         self.assertNotIn("decision_476.html", rendered)
@@ -325,6 +352,123 @@ for (const candidate of [
 ]) {
   assert.equal(inboxEnrollmentTicket(candidate, origin), null, candidate);
 }
+"""
+        )
+
+    def test_offline_worker_handles_only_root_navigation_and_bounds_startup(self) -> None:
+        self.run_node(
+            r"""
+const assert = require("node:assert/strict");
+const {
+  OFFLINE_URL,
+  STARTUP_TIMEOUT_MS,
+  fetchInboxOrOffline,
+  isInboxNavigation,
+} = require("./ui/service-worker.js");
+const origin = "https://arachne.example-tailnet.ts.net";
+
+assert.equal(OFFLINE_URL, "/offline.html");
+assert.equal(STARTUP_TIMEOUT_MS, 7000);
+assert.equal(
+  isInboxNavigation(
+    {method: "GET", mode: "navigate", url: `${origin}/`},
+    origin,
+  ),
+  true,
+);
+for (const request of [
+  {method: "POST", mode: "navigate", url: `${origin}/`},
+  {method: "GET", mode: "cors", url: `${origin}/`},
+  {method: "GET", mode: "navigate", url: `${origin}/decision_476.html`},
+  {method: "GET", mode: "navigate", url: "https://other.example/"},
+]) {
+  assert.equal(isInboxNavigation(request, origin), false);
+}
+
+class FakeAbortController {
+  constructor() {
+    this.signal = {};
+  }
+  abort() {
+    this.signal.aborted = true;
+  }
+}
+
+(async () => {
+  const live = new Response("live", {status: 200});
+  const liveResult = await fetchInboxOrOffline(
+    {url: `${origin}/`},
+    {
+      fetchImpl: async (_request, options) => {
+        assert.ok(options.signal);
+        return live;
+      },
+      matchImpl: async () => {
+        throw new Error("cache must not be read for a live response");
+      },
+      AbortControllerImpl: FakeAbortController,
+      timeoutMs: 50,
+    },
+  );
+  assert.equal(liveResult, live);
+
+  const offline = new Response("offline", {status: 200});
+  for (const fetchImpl of [
+    async () => {
+      throw new Error("tailnet unavailable");
+    },
+    async () => new Response("gateway failure", {status: 502}),
+  ]) {
+    const fallback = await fetchInboxOrOffline(
+      {url: `${origin}/`},
+      {
+        fetchImpl,
+        matchImpl: async (url) => {
+          assert.equal(url, OFFLINE_URL);
+          return offline;
+        },
+        AbortControllerImpl: FakeAbortController,
+        timeoutMs: 50,
+      },
+    );
+    assert.equal(fallback, offline);
+  }
+
+  const timedOut = await fetchInboxOrOffline(
+    {url: `${origin}/`},
+    {
+      fetchImpl: async (_request, options) =>
+        new Promise((_resolve, reject) => {
+          options.signal.addEventListener(
+            "abort",
+            () => reject(new Error("aborted")),
+            {once: true},
+          );
+        }),
+      matchImpl: async () => offline,
+      timeoutMs: 5,
+    },
+  );
+  assert.equal(timedOut, offline);
+
+  const cacheFailed = await fetchInboxOrOffline(
+    {url: `${origin}/`},
+    {
+      fetchImpl: async () => {
+        throw new Error("tailnet unavailable");
+      },
+      matchImpl: async () => {
+        throw new Error("cache unavailable");
+      },
+      timeoutMs: 50,
+    },
+  );
+  assert.equal(cacheFailed.status, 503);
+  assert.match(await cacheFailed.text(), /cannot reach the live tailnet service/);
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 """
         )
 

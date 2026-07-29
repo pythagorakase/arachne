@@ -105,11 +105,15 @@ Screen app can then bring up the tunnel when its private URL is opened. Only
 one on-demand VPN can be active at a time on iOS/iPadOS, so confirm that another
 VPN profile is not taking precedence. See Tailscale's
 [iOS and macOS VPN On Demand guide](https://tailscale.com/docs/features/client/ios-vpn-on-demand).
+VPN On Demand cannot renew an expired device login. If the Arachne app shows
+its connection-help screen, open Tailscale and confirm that the device is both
+signed in and connected before retrying.
 
 Install Arachne from the authenticated inbox in Safari. If the installed app's
 sliding session later lapses, mint a no-argument `bootstrap_url()` and paste the
 single-use URL into its locked screen; do not save the enrollment URL or owner
-token in deployment notes.
+token in deployment notes. The installed service worker caches only the generic
+connection-help document and never application data.
 
 ---
 
