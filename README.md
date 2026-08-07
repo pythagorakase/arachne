@@ -218,7 +218,8 @@ bin/publish-page.py /path/to/decision_476_relationship_drift.html
 To build a blind image-review brief, provide one manifest per subject. Every
 pose with two candidates becomes one A/B-or-tie ballot; three candidates become
 one direct best-to-worst ranking. The brief shows one pose at a time and keeps
-an overall completion tally. The builder randomizes candidate order once,
+an overall completion tally, plus a responsive rail of earlier winners for
+cross-pose consistency checks. The builder randomizes candidate order once,
 embeds compact metadata-free previews, and writes the private source mapping
 separately:
 

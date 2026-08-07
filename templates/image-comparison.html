@@ -23,7 +23,7 @@
   html { scroll-behavior: smooth; }
   body {
     margin: 0 auto;
-    max-width: 1240px;
+    max-width: 1420px;
     padding: max(18px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
       max(34vh, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
     background:
@@ -89,6 +89,81 @@
   progress::-webkit-progress-bar { background: #262d39; }
   progress::-webkit-progress-value { background: var(--accent); }
   progress::-moz-progress-bar { background: var(--accent); }
+  .review-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 158px;
+    gap: 18px;
+    align-items: start;
+  }
+  main { min-width: 0; }
+  .choice-history {
+    position: sticky;
+    top: 76px;
+    max-height: calc(100vh - 92px);
+    overflow-y: auto;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: rgb(14 17 24 / 94%);
+  }
+  .choice-history-title {
+    margin-bottom: 5px;
+    color: var(--accent);
+    font-size: .7rem;
+    font-weight: 780;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+  .choice-history-help {
+    margin-bottom: 11px;
+    color: var(--ink-muted);
+    font-size: .72rem;
+    line-height: 1.35;
+  }
+  .choice-history-list {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .history-card {
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: #090c11;
+  }
+  .history-preview {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: #050609;
+    color: inherit;
+  }
+  .history-preview img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 3 / 4;
+    object-fit: cover;
+  }
+  .history-tie {
+    display: grid;
+    aspect-ratio: 3 / 4;
+    place-items: center;
+    background: repeating-linear-gradient(135deg, #10141c 0 9px, #171c26 9px 18px);
+    color: var(--ink-muted);
+    font-size: .76rem;
+    font-weight: 760;
+    text-align: center;
+  }
+  .history-caption {
+    display: block;
+    padding: 7px;
+    color: var(--ink-muted);
+    font-size: .67rem;
+    line-height: 1.25;
+  }
   .pose {
     min-height: 82vh;
     margin: 0 0 34px;
@@ -389,6 +464,30 @@
     .review-navigation { grid-template-columns: 1fr 1fr; }
     .review-navigation span { grid-column: 1 / -1; grid-row: 1; }
   }
+  @media (max-width: 900px) {
+    .review-layout { grid-template-columns: 1fr; }
+    .choice-history {
+      position: sticky;
+      z-index: 7;
+      top: 82px;
+      order: -1;
+      max-height: none;
+      overflow: hidden;
+      padding: 8px;
+      box-shadow: 0 12px 32px rgb(0 0 0 / 34%);
+    }
+    .choice-history-title { margin-bottom: 3px; }
+    .choice-history-help { margin-bottom: 2px; }
+    .choice-history-list {
+      grid-auto-flow: column;
+      grid-auto-columns: 64px;
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+      padding-bottom: 4px;
+    }
+    .history-caption { padding: 4px; font-size: .58rem; }
+    .pose { scroll-margin-top: 250px; }
+  }
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
     .option-card, .ranking-item { transition: none; }
@@ -406,9 +505,18 @@
   <progress data-review-progress value="0" max="1"></progress>
 </aside>
 <input type="hidden" name="review__cursor" value="0" data-review-cursor>
-<main>
-@@ARACHNE_SECTIONS@@
-</main>
+<div class="review-layout">
+  <main>
+  @@ARACHNE_SECTIONS@@
+  </main>
+  <aside class="choice-history" aria-label="Previous picks" data-choice-history>
+    <p class="choice-history-title">Previous picks</p>
+    <p class="choice-history-help" data-choice-history-empty>
+      Your earlier winners will accumulate here.
+    </p>
+    <ol class="choice-history-list" data-choice-history-list></ol>
+  </aside>
+</div>
 
 <div class="lightbox" data-review-lightbox hidden role="dialog" aria-modal="true"
   aria-label="Expanded candidate preview">
@@ -428,6 +536,8 @@
   const cursor = document.querySelector("[data-review-cursor]");
   const progress = document.querySelector("[data-review-progress]");
   const progressCopy = document.querySelector("[data-review-progress-copy]");
+  const historyList = document.querySelector("[data-choice-history-list]");
+  const historyEmpty = document.querySelector("[data-choice-history-empty]");
   let activeIndex = 0;
 
   for (const image of document.querySelectorAll("img[data-review-image]")) {
@@ -438,6 +548,15 @@
   const lightbox = document.querySelector("[data-review-lightbox]");
   const lightboxImage = document.querySelector("[data-review-lightbox-image]");
   let returnFocus = null;
+  function openLightbox(source, alt, focusTarget) {
+    if (!source) return;
+    returnFocus = focusTarget;
+    lightboxImage.src = source;
+    lightboxImage.alt = alt || "Expanded candidate preview";
+    lightbox.hidden = false;
+    document.body.classList.add("lightbox-open");
+    document.querySelector("[data-review-lightbox-close]").focus();
+  }
   function closeLightbox() {
     if (lightbox.hidden) return;
     lightbox.hidden = true;
@@ -449,13 +568,7 @@
   for (const button of document.querySelectorAll("[data-review-zoom]")) {
     button.addEventListener("click", () => {
       const source = assets[button.dataset.reviewZoom];
-      if (!source) return;
-      returnFocus = button;
-      lightboxImage.src = source;
-      lightboxImage.alt = button.dataset.reviewZoomAlt || "Expanded candidate preview";
-      lightbox.hidden = false;
-      document.body.classList.add("lightbox-open");
-      document.querySelector("[data-review-lightbox-close]").focus();
+      openLightbox(source, button.dataset.reviewZoomAlt, button);
     });
   }
   document.querySelector("[data-review-lightbox-close]").addEventListener("click", closeLightbox);
@@ -561,6 +674,54 @@
     return sections.filter(sectionAnswered).length;
   }
 
+  function historyChoice(section) {
+    if (section.dataset.reviewMode === "ranking") {
+      const ranked = String(section.querySelector("[data-ranking-input]")?.value || "")
+        .split("|")
+        .filter(Boolean);
+      return ranked[0] ? {opaqueId: ranked[0], kind: "Top ranked"} : null;
+    }
+    const chosen = section.querySelector('[data-review-pair] input[type="radio"]:checked');
+    if (!chosen) return null;
+    return chosen.value === "tie"
+      ? {opaqueId: null, kind: "Tie — no anchor"}
+      : {opaqueId: chosen.value, kind: "Pair winner"};
+  }
+
+  function updateHistory() {
+    historyList.replaceChildren();
+    sections.slice(0, activeIndex).forEach((section, index) => {
+      const choice = historyChoice(section);
+      if (!choice) return;
+      const item = document.createElement("li");
+      item.className = "history-card";
+      const poseLabel = section.querySelector("h2")?.textContent || `Pose ${index + 1}`;
+      if (choice.opaqueId && assets[choice.opaqueId]) {
+        const preview = document.createElement("button");
+        preview.type = "button";
+        preview.className = "history-preview";
+        preview.setAttribute("aria-label", `Inspect previous pick for ${poseLabel}`);
+        const image = document.createElement("img");
+        image.src = assets[choice.opaqueId];
+        image.alt = `Previous pick for ${poseLabel}`;
+        preview.append(image);
+        preview.addEventListener("click", () => openLightbox(image.src, image.alt, preview));
+        item.append(preview);
+      } else {
+        const tie = document.createElement("div");
+        tie.className = "history-tie";
+        tie.textContent = "Tie";
+        item.append(tie);
+      }
+      const caption = document.createElement("span");
+      caption.className = "history-caption";
+      caption.textContent = `${index + 1}. ${choice.kind}`;
+      item.append(caption);
+      historyList.append(item);
+    });
+    historyEmpty.hidden = historyList.children.length > 0;
+  }
+
   function updateProgress() {
     const complete = completedCount();
     progress.max = sections.length;
@@ -572,6 +733,7 @@
       if (tally) tally.textContent = `${complete} of ${sections.length} complete`;
       if (next) next.disabled = !sectionAnswered(section) || activeIndex === sections.length - 1;
     }
+    updateHistory();
   }
 
   function showPose(index, {scroll = true} = {}) {

@@ -119,6 +119,9 @@ class ImageReviewTests(unittest.TestCase):
         self.assertIn('value="tie"', first_html)
         self.assertIn("Use this ranking", first_html)
         self.assertIn("data-review-next", first_html)
+        self.assertIn("data-choice-history", first_html)
+        self.assertIn("Previous picks", first_html)
+        self.assertIn("function updateHistory()", first_html)
 
     def test_rendered_page_is_blind_self_contained_and_contract_valid(self) -> None:
         manifest = load_manifest(self.write_manifest())
