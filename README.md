@@ -216,10 +216,11 @@ bin/publish-page.py /path/to/decision_476_relationship_drift.html
 ```
 
 To build a blind image-review brief, provide one manifest per subject. Every
-pose with two candidates becomes one A/B ballot; three candidates become a
-three-pair round-robin on the same pose page. The builder randomizes matchup
-order and left/right placement once, embeds compact metadata-free previews,
-and writes the private source mapping separately:
+pose with two candidates becomes one A/B-or-tie ballot; three candidates become
+one direct best-to-worst ranking. The brief shows one pose at a time and keeps
+an overall completion tally. The builder randomizes candidate order once,
+embeds compact metadata-free previews, and writes the private source mapping
+separately:
 
 ```bash
 bin/build-image-review.py manifest.json decision_character_review.html

@@ -8,9 +8,12 @@ that output through `bin/publish-page.py` like any other Arachne decision.
 
 `bin/build-image-review.py` consumes one JSON manifest per subject. Each pose
 contains exactly two or three candidate images. Two candidates yield one A/B
-ballot; three candidates yield all three pairwise ballots on the same pose page.
-The matchup order and left/right assignment are randomized once at build time
-and preserved in a private provenance sidecar.
+or tie decision. Three candidates appear once in a best-to-worst ranking board,
+with drag ordering and mobile-safe move buttons. Only one pose is visible at a
+time; the reviewer answers, may leave an optional comment, and advances through
+the brief. Candidate order and A/B assignment are randomized once at build time
+and preserved in a private provenance sidecar. A direct three-item ranking is
+complete in one pass and does not require repeated pairwise or Elo matchups.
 
 ```json
 {

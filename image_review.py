@@ -11,7 +11,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
-import itertools
 import json
 import os
 import random
@@ -380,21 +379,19 @@ def _fill_template(template: str, replacements: dict[str, str]) -> str:
     return rendered
 
 
-def _option_markup(
+def _pair_option_markup(
     *,
     letter: str,
     opaque_id: str,
     field: str,
     subject: str,
     pose: str,
-    matchup_number: int,
-    matchup_count: int,
 ) -> str:
     escaped_letter = html.escape(letter)
     escaped_id = html.escape(opaque_id, quote=True)
     escaped_field = html.escape(field, quote=True)
     alt = html.escape(
-        f"Option {letter} for {subject}, {pose}, comparison {matchup_number} of {matchup_count}",
+        f"Option {letter} for {subject}, {pose}",
         quote=True,
     )
     return f"""
@@ -414,6 +411,38 @@ def _option_markup(
           </article>"""
 
 
+def _ranking_option_markup(
+    *,
+    opaque_id: str,
+    subject: str,
+    pose: str,
+    initial_position: int,
+) -> str:
+    escaped_id = html.escape(opaque_id, quote=True)
+    alt = html.escape(
+        f"Candidate for {subject}, {pose}, initial rank {initial_position}",
+        quote=True,
+    )
+    return f"""
+        <li class="ranking-item" draggable="true"
+          data-ranking-candidate="{escaped_id}">
+          <article class="rank-card">
+            <span class="rank-badge" data-rank-badge>{initial_position}</span>
+            <span class="image-frame rank-image-frame">
+              <img data-review-image="{escaped_id}" alt="{alt}"
+                loading="lazy" decoding="async">
+            </span>
+            <div class="rank-controls">
+              <button type="button" data-rank-up aria-label="Move candidate up">↑</button>
+              <span data-rank-label>Rank {initial_position}</span>
+              <button type="button" data-rank-down aria-label="Move candidate down">↓</button>
+            </div>
+          </article>
+          <button class="zoom-button" type="button" data-review-zoom="{escaped_id}"
+            data-review-zoom-alt="{alt}">Inspect</button>
+        </li>"""
+
+
 def _sections_markup(
     manifest: ReviewManifest,
     rendered_poses: list[dict[str, Any]],
@@ -428,49 +457,80 @@ def _sections_markup(
             if pose["note"]
             else ""
         )
-        matchups: list[str] = []
-        count = len(pose["matchups"])
-        for matchup_index, matchup in enumerate(pose["matchups"], 1):
-            left = _option_markup(
+        decision = pose["decision"]
+        if decision["mode"] == "pair":
+            left = _pair_option_markup(
                 letter="A",
-                opaque_id=matchup["left"],
-                field=matchup["field"],
+                opaque_id=decision["left"],
+                field=decision["field"],
                 subject=manifest.subject_label,
                 pose=pose["label"],
-                matchup_number=matchup_index,
-                matchup_count=count,
             )
-            right = _option_markup(
+            right = _pair_option_markup(
                 letter="B",
-                opaque_id=matchup["right"],
-                field=matchup["field"],
+                opaque_id=decision["right"],
+                field=decision["field"],
                 subject=manifest.subject_label,
                 pose=pose["label"],
-                matchup_number=matchup_index,
-                matchup_count=count,
             )
-            matchups.append(
-                f"""
-      <fieldset class="matchup" data-review-matchup>
-        <legend>Comparison {matchup_index} of {count}</legend>
+            field = html.escape(decision["field"], quote=True)
+            decision_markup = f"""
+      <fieldset class="pair-decision" data-review-pair>
+        <legend>Choose the stronger reference</legend>
         <div class="pair">{left}{right}
         </div>
+        <label class="tie-choice">
+          <input type="radio" name="{field}" value="tie">
+          <span>Tie — neither is stronger</span>
+        </label>
       </fieldset>"""
+        else:
+            ranking_items = "".join(
+                _ranking_option_markup(
+                    opaque_id=opaque_id,
+                    subject=manifest.subject_label,
+                    pose=pose["label"],
+                    initial_position=position,
+                )
+                for position, opaque_id in enumerate(decision["order"], 1)
             )
+            field = html.escape(decision["field"], quote=True)
+            decision_markup = f"""
+      <fieldset class="ranking-decision" data-review-ranking>
+        <legend>Rank once from best to worst</legend>
+        <p class="ranking-help">Drag the cards, or use the arrow buttons. Best stays first.</p>
+        <input type="hidden" name="{field}" value="" data-ranking-input>
+        <ol class="ranking-list" data-ranking-list>{ranking_items}
+        </ol>
+        <button class="ranking-confirm" type="button" data-ranking-confirm>
+          Use this ranking
+        </button>
+        <p class="ranking-status" data-ranking-status aria-live="polite">
+          Arrange the cards, then confirm the order.
+        </p>
+      </fieldset>"""
         comment_id = html.escape(f"comment-{pose['id']}", quote=True)
         comment_field = html.escape(pose["comment_field"], quote=True)
+        hidden = "" if pose_index == 1 else " hidden"
         sections.append(
             f"""
-  <section class="pose" data-decision="{pose_id}" data-label="{label_attribute}">
+  <section class="pose" data-decision="{pose_id}" data-label="{label_attribute}"
+    data-review-mode="{html.escape(decision['mode'], quote=True)}"
+    data-review-index="{pose_index - 1}"{hidden}>
     <header class="pose-header">
       <p class="eyebrow">Pose {pose_index} of {len(rendered_poses)}</p>
       <h2>{label_text}</h2>
       {note}
     </header>
-    {''.join(matchups)}
+    {decision_markup}
     <label class="comment-label" for="{comment_id}">Optional comment</label>
     <textarea id="{comment_id}" name="{comment_field}" rows="3"
       placeholder="What made one version stronger, or what should change next?"></textarea>
+    <nav class="review-navigation" aria-label="Review navigation">
+      <button type="button" data-review-previous>Previous</button>
+      <span data-review-tally>0 of {len(rendered_poses)} complete</span>
+      <button type="button" data-review-next>Next</button>
+    </nav>
   </section>"""
         )
     return "\n".join(sections)
@@ -552,26 +612,29 @@ def render_review(
                 }
             )
 
-        pairs = list(itertools.combinations(candidates, 2))
-        rng.shuffle(pairs)
-        matchups: list[dict[str, str]] = []
-        for matchup_index, (first, second) in enumerate(pairs, 1):
-            sides = [first["opaque_id"], second["opaque_id"]]
-            rng.shuffle(sides)
-            matchups.append(
-                {
-                    "field": f"vote__{pose.pose_id}__{matchup_index}",
-                    "left": sides[0],
-                    "right": sides[1],
-                }
-            )
+        order = [candidate["opaque_id"] for candidate in candidates]
+        rng.shuffle(order)
+        if len(order) == 2:
+            decision = {
+                "mode": "pair",
+                "field": f"vote__{pose.pose_id}",
+                "left": order[0],
+                "right": order[1],
+                "tie_value": "tie",
+            }
+        else:
+            decision = {
+                "mode": "ranking",
+                "field": f"ranking__{pose.pose_id}",
+                "order": order,
+            }
         comment_field = f"comment__{pose.pose_id}"
         rendered_pose = {
             "id": pose.pose_id,
             "label": pose.label,
             "note": pose.note,
             "comment_field": comment_field,
-            "matchups": matchups,
+            "decision": decision,
         }
         rendered_poses.append(rendered_pose)
         provenance_poses.append(

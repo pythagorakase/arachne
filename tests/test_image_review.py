@@ -9,7 +9,6 @@ import struct
 import tempfile
 import unittest
 import zlib
-from collections import Counter
 from pathlib import Path
 
 from image_review import ImageReviewError, build_review, load_manifest, render_review
@@ -85,7 +84,7 @@ class ImageReviewTests(unittest.TestCase):
         )
         return manifest
 
-    def test_two_and_three_candidate_poses_render_as_one_and_three_ballots(self) -> None:
+    def test_two_candidates_render_once_as_pair_and_three_once_as_ranking(self) -> None:
         manifest = load_manifest(self.write_manifest())
         first_html, first_provenance = render_review(
             manifest,
@@ -103,21 +102,23 @@ class ImageReviewTests(unittest.TestCase):
         self.assertEqual(first_html, second_html)
         self.assertEqual(first_provenance, second_provenance)
         self.assertEqual(
-            [len(pose["matchups"]) for pose in first_provenance["poses"]],
-            [1, 3],
+            [pose["decision"]["mode"] for pose in first_provenance["poses"]],
+            ["pair", "ranking"],
         )
+        self.assertEqual(first_html.count('data-review-pair>'), 1)
+        self.assertEqual(first_html.count('data-review-ranking>'), 1)
         three_way = first_provenance["poses"][1]
-        appearances = Counter(
-            opaque_id
-            for matchup in three_way["matchups"]
-            for opaque_id in (matchup["left"], matchup["right"])
-        )
-        self.assertEqual(set(appearances.values()), {2})
-        self.assertEqual(len(appearances), 3)
-        self.assertEqual(
-            first_html.count('<fieldset class="matchup" data-review-matchup>'), 4
-        )
+        ranking = three_way["decision"]["order"]
+        self.assertEqual(len(ranking), 3)
+        self.assertEqual(len(set(ranking)), 3)
+        for opaque_id in ranking:
+            self.assertEqual(
+                first_html.count(f'data-review-image="{opaque_id}"'), 1
+            )
         self.assertEqual(first_html.count('data-decision="'), 2)
+        self.assertIn('value="tie"', first_html)
+        self.assertIn("Use this ranking", first_html)
+        self.assertIn("data-review-next", first_html)
 
     def test_rendered_page_is_blind_self_contained_and_contract_valid(self) -> None:
         manifest = load_manifest(self.write_manifest())
@@ -166,7 +167,7 @@ class ImageReviewTests(unittest.TestCase):
         for value in assets.values():
             self.assertEqual(rendered.count(value), 1)
 
-    def test_comment_is_optional_but_completeness_hook_requires_each_ballot(self) -> None:
+    def test_comment_is_optional_but_ranking_requires_a_confirmed_order(self) -> None:
         manifest = load_manifest(self.write_manifest(candidate_counts=(3,)))
         rendered, _ = render_review(
             manifest,
@@ -176,10 +177,10 @@ class ImageReviewTests(unittest.TestCase):
         )
 
         self.assertEqual(rendered.count("<textarea"), 1)
-        self.assertIn(
-            'matchups.every((matchup) => matchup.querySelector(\'input[type="radio"]:checked\'))',
-            rendered,
-        )
+        self.assertIn('section.dataset.reviewMode === "ranking"', rendered)
+        self.assertIn("ids.length === 3 && new Set(ids).size === 3", rendered)
+        self.assertIn("Arrange the cards, then confirm the order.", rendered)
+        self.assertIn('window.matchMedia("(max-width: 720px)")', rendered)
         self.assertNotIn("textarea:checked", rendered)
 
     def test_build_writes_owner_only_page_and_private_provenance(self) -> None:

@@ -23,7 +23,7 @@
   html { scroll-behavior: smooth; }
   body {
     margin: 0 auto;
-    max-width: 1180px;
+    max-width: 1240px;
     padding: max(18px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
       max(34vh, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
     background:
@@ -31,9 +31,11 @@
       #090b10;
   }
   body.lightbox-open { overflow: hidden; }
+  button, textarea { font: inherit; }
+  button { touch-action: manipulation; }
   h1, h2, p { margin-top: 0; }
   .brief-header {
-    padding: clamp(20px, 5vw, 52px) 2px clamp(26px, 6vw, 60px);
+    padding: clamp(20px, 5vw, 52px) 2px clamp(20px, 4vw, 38px);
   }
   .eyebrow {
     margin-bottom: 8px;
@@ -51,40 +53,71 @@
     letter-spacing: -.045em;
   }
   .instructions {
-    max-width: 64ch;
+    max-width: 70ch;
+    margin-bottom: 0;
     color: var(--ink-muted);
     font-size: clamp(1rem, 2.1vw, 1.2rem);
     line-height: 1.55;
   }
+  .review-progress {
+    position: sticky;
+    z-index: 8;
+    top: max(8px, env(safe-area-inset-top));
+    display: grid;
+    grid-template-columns: auto minmax(100px, 1fr);
+    gap: 14px;
+    align-items: center;
+    margin: 0 0 18px;
+    padding: 11px 14px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: rgb(14 17 24 / 92%);
+    box-shadow: 0 12px 36px rgb(0 0 0 / 30%);
+    color: var(--ink-muted);
+    font-size: .83rem;
+    font-weight: 720;
+    backdrop-filter: blur(14px);
+  }
+  progress {
+    width: 100%;
+    height: 8px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 999px;
+    background: #262d39;
+  }
+  progress::-webkit-progress-bar { background: #262d39; }
+  progress::-webkit-progress-value { background: var(--accent); }
+  progress::-moz-progress-bar { background: var(--accent); }
   .pose {
-    min-height: 88vh;
+    min-height: 82vh;
     margin: 0 0 34px;
     padding: clamp(15px, 3vw, 30px);
     border: 1px solid var(--line);
     border-radius: 20px;
     background: color-mix(in srgb, var(--panel) 94%, transparent);
     box-shadow: 0 26px 70px rgb(0 0 0 / 24%);
-    scroll-margin-top: 12px;
+    scroll-margin-top: 74px;
   }
+  .pose[hidden] { display: none; }
   .pose-header { margin-bottom: 18px; }
   h2 {
     margin-bottom: 8px;
     font-size: clamp(1.55rem, 4vw, 2.6rem);
     letter-spacing: -.025em;
   }
-  .pose-note {
+  .pose-note, .ranking-help {
     max-width: 70ch;
-    margin-bottom: 0;
     color: var(--ink-muted);
     line-height: 1.45;
   }
-  .matchup {
+  .pair-decision, .ranking-decision {
     min-width: 0;
-    margin: 0 0 22px;
+    margin: 0;
     padding: 0;
     border: 0;
   }
-  .matchup legend {
+  .pair-decision > legend, .ranking-decision > legend {
     width: 100%;
     margin-bottom: 10px;
     color: var(--ink-muted);
@@ -98,13 +131,13 @@
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: clamp(8px, 2vw, 18px);
   }
-  .option-shell {
+  .option-shell, .ranking-item {
     position: relative;
     min-width: 0;
     border-radius: 16px;
     background: var(--panel-raised);
   }
-  .option-card {
+  .option-card, .rank-card {
     position: relative;
     display: grid;
     min-width: 0;
@@ -112,6 +145,8 @@
     border: 2px solid var(--line);
     border-radius: 16px;
     background: #0d1016;
+  }
+  .option-card {
     cursor: pointer;
     transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
     -webkit-tap-highlight-color: transparent;
@@ -132,7 +167,7 @@
     outline: 3px solid var(--accent-cool);
     outline-offset: 3px;
   }
-  .option-letter {
+  .option-letter, .rank-badge {
     position: absolute;
     z-index: 2;
     top: 9px;
@@ -151,7 +186,8 @@
   }
   .image-frame {
     display: grid;
-    height: clamp(330px, 62vh, 760px);
+    width: 100%;
+    aspect-ratio: 3 / 4;
     place-items: center;
     overflow: hidden;
     background: #050609;
@@ -184,21 +220,87 @@
     border-radius: 999px;
     background: rgb(5 7 10 / 82%);
     color: white;
-    font: inherit;
     font-size: .72rem;
     font-weight: 720;
     backdrop-filter: blur(8px);
   }
+  .tie-choice {
+    display: flex;
+    width: fit-content;
+    min-height: 46px;
+    margin: 16px auto 0;
+    padding: 0 17px;
+    align-items: center;
+    gap: 9px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: #0d1016;
+    color: var(--ink-muted);
+    cursor: pointer;
+  }
+  .tie-choice:has(input:checked) {
+    border-color: var(--selected);
+    color: var(--selected);
+  }
+  .ranking-help { margin-bottom: 14px; }
+  .ranking-list {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 13px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .ranking-item {
+    cursor: grab;
+    transition: transform 120ms ease, opacity 120ms ease;
+  }
+  .ranking-item.dragging { opacity: .45; }
+  .ranking-item.drop-target { transform: translateY(-4px); }
+  .rank-controls {
+    display: grid;
+    grid-template-columns: 44px 1fr 44px;
+    align-items: center;
+    border-top: 1px solid var(--line);
+    color: var(--ink-muted);
+    text-align: center;
+  }
+  .rank-controls button {
+    min-height: 44px;
+    border: 0;
+    background: transparent;
+    color: #eee7df;
+    font-size: 1.15rem;
+  }
+  .rank-controls button:disabled { color: #555c68; }
+  .rank-controls span { font-size: .8rem; font-weight: 740; }
+  .ranking-confirm {
+    display: block;
+    min-height: 48px;
+    margin: 17px auto 0;
+    padding: 0 22px;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    background: rgb(233 167 95 / 13%);
+    color: var(--selected);
+    font-weight: 760;
+  }
+  .ranking-status {
+    margin: 9px 0 0;
+    color: var(--ink-muted);
+    font-size: .8rem;
+    text-align: center;
+  }
   .comment-label {
     display: block;
-    margin: 28px 0 8px;
+    margin: 24px 0 8px;
     color: var(--ink-muted);
     font-size: .84rem;
     font-weight: 700;
   }
   textarea {
     width: 100%;
-    min-height: 92px;
+    min-height: 86px;
     resize: vertical;
     padding: 13px 14px;
     border: 1px solid var(--line);
@@ -206,10 +308,40 @@
     outline: 0;
     background: #090c11;
     color: inherit;
-    font: inherit;
     line-height: 1.45;
   }
   textarea:focus { border-color: var(--accent-cool); }
+  .review-navigation {
+    display: grid;
+    grid-template-columns: minmax(88px, auto) 1fr minmax(88px, auto);
+    gap: 10px;
+    align-items: center;
+    margin-top: 18px;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: #0d1016;
+    box-shadow: 0 12px 32px rgb(0 0 0 / 34%);
+  }
+  .review-navigation button {
+    min-height: 44px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel-raised);
+    color: #f4eee7;
+    font-weight: 730;
+  }
+  .review-navigation button[data-review-next] {
+    border-color: var(--accent);
+    background: rgb(233 167 95 / 13%);
+    color: var(--selected);
+  }
+  .review-navigation button:disabled { opacity: .38; }
+  .review-navigation span {
+    color: var(--ink-muted);
+    font-size: .78rem;
+    text-align: center;
+  }
   .lightbox[hidden] { display: none; }
   .lightbox {
     position: fixed;
@@ -237,26 +369,29 @@
     border-radius: 999px;
     background: #15171d;
     color: white;
-    font: inherit;
     font-weight: 750;
   }
-  @media (max-width: 560px) {
+  @media (max-width: 720px) {
     body {
       padding-left: max(9px, env(safe-area-inset-left));
       padding-right: max(9px, env(safe-area-inset-right));
     }
     .brief-header { padding-left: 5px; padding-right: 5px; }
+    .review-progress { grid-template-columns: 1fr; gap: 6px; border-radius: 14px; }
     .pose { min-height: 84vh; padding: 13px; border-radius: 15px; }
     .pair { gap: 7px; }
-    .option-shell, .option-card { border-radius: 11px; }
-    .image-frame { height: clamp(250px, 48vh, 470px); }
-    .option-letter { top: 6px; left: 6px; width: 30px; height: 30px; }
+    .option-shell, .option-card, .rank-card { border-radius: 11px; }
+    .option-letter, .rank-badge { top: 6px; left: 6px; width: 30px; height: 30px; }
     .zoom-button { top: 6px; right: 6px; min-height: 30px; padding: 0 8px; font-size: .66rem; }
     .choose-label { padding: 11px 5px; font-size: .82rem; }
+    .ranking-list { grid-template-columns: 1fr; }
+    .rank-image-frame { max-height: 66vh; }
+    .review-navigation { grid-template-columns: 1fr 1fr; }
+    .review-navigation span { grid-column: 1 / -1; grid-row: 1; }
   }
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    .option-card { transition: none; }
+    .option-card, .ranking-item { transition: none; }
   }
 </style>
 </head>
@@ -266,6 +401,11 @@
   <h1>@@ARACHNE_HEADING@@</h1>
   <p class="instructions">@@ARACHNE_INSTRUCTIONS@@</p>
 </header>
+<aside class="review-progress" aria-live="polite">
+  <span data-review-progress-copy>0 complete</span>
+  <progress data-review-progress value="0" max="1"></progress>
+</aside>
+<input type="hidden" name="review__cursor" value="0" data-review-cursor>
 <main>
 @@ARACHNE_SECTIONS@@
 </main>
@@ -284,6 +424,12 @@
 
   const assets = JSON.parse(document.getElementById("arachne-review-assets").textContent);
   const review = JSON.parse(document.getElementById("arachne-review-model").textContent);
+  const sections = Array.from(document.querySelectorAll("[data-decision]"));
+  const cursor = document.querySelector("[data-review-cursor]");
+  const progress = document.querySelector("[data-review-progress]");
+  const progressCopy = document.querySelector("[data-review-progress-copy]");
+  let activeIndex = 0;
+
   for (const image of document.querySelectorAll("img[data-review-image]")) {
     const source = assets[image.dataset.reviewImage];
     if (source) image.src = source;
@@ -320,35 +466,191 @@
     if (event.key === "Escape") closeLightbox();
   });
 
+  function rankingIds(section) {
+    return Array.from(section.querySelectorAll("[data-ranking-candidate]"))
+      .map((item) => item.dataset.rankingCandidate || "")
+      .filter(Boolean);
+  }
+
+  function rankingIsValid(section) {
+    const value = section.querySelector("[data-ranking-input]")?.value || "";
+    const ids = value.split("|").filter(Boolean);
+    return ids.length === 3 && new Set(ids).size === 3;
+  }
+
+  function sectionAnswered(section) {
+    if (section.dataset.reviewMode === "ranking") return rankingIsValid(section);
+    return Boolean(section.querySelector('[data-review-pair] input[type="radio"]:checked'));
+  }
+
+  function updateRankDisplay(list) {
+    const items = Array.from(list.querySelectorAll("[data-ranking-candidate]"));
+    items.forEach((item, index) => {
+      item.querySelector("[data-rank-badge]").textContent = String(index + 1);
+      item.querySelector("[data-rank-label]").textContent =
+        index === 0 ? "Best" : index === items.length - 1 ? "Worst" : "Middle";
+      item.querySelector("[data-rank-up]").disabled = index === 0;
+      item.querySelector("[data-rank-down]").disabled = index === items.length - 1;
+    });
+  }
+
+  function commitRanking(section) {
+    const input = section.querySelector("[data-ranking-input]");
+    input.value = rankingIds(section).join("|");
+    section.querySelector("[data-ranking-status]").textContent = "Ranking saved.";
+    section.querySelector("[data-ranking-confirm]").textContent = "Ranking saved";
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+    input.dispatchEvent(new Event("change", {bubbles: true}));
+  }
+
+  for (const ranking of document.querySelectorAll("[data-review-ranking]")) {
+    const section = ranking.closest("[data-decision]");
+    const list = ranking.querySelector("[data-ranking-list]");
+    let dragged = null;
+    updateRankDisplay(list);
+
+    ranking.querySelector("[data-ranking-confirm]").addEventListener("click", () => {
+      commitRanking(section);
+    });
+    ranking.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-rank-up], [data-rank-down]");
+      if (!button) return;
+      const item = button.closest("[data-ranking-candidate]");
+      if (button.hasAttribute("data-rank-up") && item.previousElementSibling) {
+        list.insertBefore(item, item.previousElementSibling);
+      } else if (button.hasAttribute("data-rank-down") && item.nextElementSibling) {
+        list.insertBefore(item.nextElementSibling, item);
+      } else {
+        return;
+      }
+      updateRankDisplay(list);
+      commitRanking(section);
+    });
+    list.addEventListener("dragstart", (event) => {
+      dragged = event.target.closest("[data-ranking-candidate]");
+      if (!dragged) return;
+      dragged.classList.add("dragging");
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    });
+    list.addEventListener("dragover", (event) => {
+      const target = event.target.closest("[data-ranking-candidate]");
+      if (!dragged || !target || target === dragged) return;
+      event.preventDefault();
+      for (const item of list.children) item.classList.toggle("drop-target", item === target);
+    });
+    list.addEventListener("drop", (event) => {
+      const target = event.target.closest("[data-ranking-candidate]");
+      if (!dragged || !target || target === dragged) return;
+      event.preventDefault();
+      const rect = target.getBoundingClientRect();
+      const after = window.matchMedia("(max-width: 720px)").matches
+        ? event.clientY > rect.top + rect.height / 2
+        : event.clientX > rect.left + rect.width / 2;
+      list.insertBefore(dragged, after ? target.nextElementSibling : target);
+      updateRankDisplay(list);
+      commitRanking(section);
+    });
+    list.addEventListener("dragend", () => {
+      dragged?.classList.remove("dragging");
+      dragged = null;
+      for (const item of list.children) item.classList.remove("drop-target");
+    });
+  }
+
+  function completedCount() {
+    return sections.filter(sectionAnswered).length;
+  }
+
+  function updateProgress() {
+    const complete = completedCount();
+    progress.max = sections.length;
+    progress.value = complete;
+    progressCopy.textContent = `${complete} of ${sections.length} complete`;
+    for (const section of sections) {
+      const tally = section.querySelector("[data-review-tally]");
+      const next = section.querySelector("[data-review-next]");
+      if (tally) tally.textContent = `${complete} of ${sections.length} complete`;
+      if (next) next.disabled = !sectionAnswered(section) || activeIndex === sections.length - 1;
+    }
+  }
+
+  function showPose(index, {scroll = true} = {}) {
+    activeIndex = Math.max(0, Math.min(sections.length - 1, Number(index) || 0));
+    sections.forEach((section, position) => {
+      section.hidden = position !== activeIndex;
+      const previous = section.querySelector("[data-review-previous]");
+      if (previous) previous.disabled = activeIndex === 0;
+      const next = section.querySelector("[data-review-next]");
+      if (next) {
+        next.textContent = activeIndex === sections.length - 1 ? "All choices saved" : "Next";
+      }
+    });
+    cursor.value = String(activeIndex);
+    updateProgress();
+    if (scroll) sections[activeIndex].scrollIntoView({behavior: "smooth", block: "start"});
+  }
+
+  for (const section of sections) {
+    section.querySelector("[data-review-previous]").addEventListener("click", () => {
+      showPose(activeIndex - 1);
+    });
+    section.querySelector("[data-review-next]").addEventListener("click", () => {
+      if (sectionAnswered(section)) showPose(activeIndex + 1);
+    });
+  }
+  document.addEventListener("input", updateProgress);
+  document.addEventListener("change", updateProgress);
+
+  function syncFromInputs() {
+    for (const section of sections.filter((candidate) => candidate.dataset.reviewMode === "ranking")) {
+      const input = section.querySelector("[data-ranking-input]");
+      const ids = String(input.value || "").split("|").filter(Boolean);
+      const list = section.querySelector("[data-ranking-list]");
+      const items = new Map(
+        Array.from(list.querySelectorAll("[data-ranking-candidate]")).map((item) => [
+          item.dataset.rankingCandidate,
+          item,
+        ]),
+      );
+      if (ids.length === 3 && ids.every((id) => items.has(id))) {
+        ids.forEach((id) => list.append(items.get(id)));
+        section.querySelector("[data-ranking-status]").textContent = "Ranking restored.";
+        section.querySelector("[data-ranking-confirm]").textContent = "Ranking saved";
+      }
+      updateRankDisplay(list);
+    }
+    showPose(Number(cursor.value || 0), {scroll: false});
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window.parent || event.data?.source !== "arachne-chrome") return;
+    if (event.data.type === "restore") setTimeout(syncFromInputs, 0);
+    if (event.data.type === "scroll-to") {
+      const index = sections.findIndex((section) => section.dataset.decision === event.data.axis);
+      if (index >= 0) showPose(index);
+    }
+  });
+
   window.arachneCaptureHooks = Object.freeze({
     isAnswered(element) {
-      const matchups = Array.from(element.querySelectorAll("[data-review-matchup]"));
-      return (
-        matchups.length > 0 &&
-        matchups.every((matchup) => matchup.querySelector('input[type="radio"]:checked'))
-      );
+      return sectionAnswered(element);
     },
     composeMarkdown(form) {
       const lines = [`# ${review.title}`, ""];
       for (const pose of review.poses) {
         lines.push(`## ${pose.label}`);
-        const wins = new Map();
-        pose.matchups.forEach((matchup, index) => {
-          const chosen = String(form[matchup.field] || "");
-          const side = chosen === matchup.left ? "A" : chosen === matchup.right ? "B" : "unanswered";
-          lines.push(`- Comparison ${index + 1}: ${side}${chosen ? ` (${chosen})` : ""}`);
-          if (chosen) wins.set(chosen, (wins.get(chosen) || 0) + 1);
-        });
-        const ranked = Array.from(wins.entries()).sort(
-          (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
-        );
-        if (ranked.length) {
-          const leaders = ranked.filter((entry) => entry[1] === ranked[0][1]);
-          lines.push(
-            leaders.length === 1
-              ? `- Pairwise leader: ${leaders[0][0]} (${leaders[0][1]} win${leaders[0][1] === 1 ? "" : "s"})`
-              : `- Pairwise tie: ${leaders.map((entry) => entry[0]).join(", ")}`,
-          );
+        const decision = pose.decision;
+        if (decision.mode === "pair") {
+          const chosen = String(form[decision.field] || "");
+          if (chosen === decision.tie_value) {
+            lines.push("- Choice: Tie");
+          } else {
+            const side = chosen === decision.left ? "A" : chosen === decision.right ? "B" : "unanswered";
+            lines.push(`- Choice: ${side}${chosen ? ` (${chosen})` : ""}`);
+          }
+        } else {
+          const ranked = String(form[decision.field] || "").split("|").filter(Boolean);
+          lines.push(ranked.length ? `- Ranking: ${ranked.join(" > ")}` : "- Ranking: unanswered");
         }
         const comment = String(form[pose.comment_field] || "").trim();
         if (comment) {
@@ -359,6 +661,8 @@
       return lines.join("\n").trim();
     },
   });
+
+  showPose(0, {scroll: false});
 })();
 </script>
 <script data-arachne-brief-agent>
