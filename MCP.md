@@ -102,6 +102,36 @@ codex mcp add arachne \
   --bearer-token-env-var ARACHNE_MCP_TOKEN
 ```
 
+On macOS, install the repo's user-level skill and secret-free login bootstrap
+instead of manually repeating `launchctl setenv` after every login:
+
+```bash
+bin/install-codex-client-support.sh
+```
+
+The installer symlinks `plugin/skills/arachne` into
+`~/.agents/skills/arachne` and installs a LaunchAgent that reads the owner-only
+token file at login. The plist contains only the exporter path, never the
+token. Codex follows symlinked skill directories; keeping the link pointed at
+the checkout also means skill updates arrive with normal repo updates.
+
+The client skill gives each Codex task its own durable cursor using
+`$CODEX_THREAD_ID`. That keeps one shared Arachne mailbox safe across projects
+and simultaneous agent sessions; one consumer advancing does not hide a ruling
+from another.
+
+Set the long tool timeout and least-privilege allowlist in
+`~/.codex/config.toml` after registration:
+
+```toml
+[mcp_servers.arachne]
+url = "https://host.example-tailnet.ts.net:8443/mcp"
+bearer_token_env_var = "ARACHNE_MCP_TOKEN"
+tool_timeout_sec = 86400
+enabled_tools = ["status", "get_ruling", "wait_for_ruling", "publish_decision", "bootstrap_url"]
+default_tools_approval_mode = "approve"
+```
+
 Give `wait_for_ruling` a tool timeout longer than the intended human wait. For
 a least-privilege profile, approve only these five named tools rather than
 granting general shell access. A running Codex desktop process may need to be

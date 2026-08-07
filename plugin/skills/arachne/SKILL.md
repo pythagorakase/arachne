@@ -1,6 +1,6 @@
 ---
 name: arachne
-description: Put a rich, interactive decision to the human via Arachne and get woken in the SAME session when they answer from any device (phone/tablet/laptop). Use when a choice is richer than a few options (charts, simulators, side-by-side previews, validated forms) and/or should be answered asynchronously from anywhere, instead of a synchronous in-terminal prompt. Also triggers on "ask me on my phone", "put this to me asynchronously", "wake me when I decide/answer", or any mention of Arachne / a decision page / the decision loom. NOT for quick synchronous choices you need answered right now — use AskUserQuestion for those.
+description: Put a rich, interactive decision to the human via Arachne and get woken in the SAME session when they answer from any device (phone/tablet/laptop). Use when a choice is richer than a few options (charts, simulators, side-by-side previews, validated forms) and/or should be answered asynchronously from anywhere, instead of a synchronous prompt. Also triggers on "ask me on my phone", "put this to me asynchronously", "wake me when I decide/answer", or any mention of Arachne / a decision page / the decision loom. NOT for quick synchronous choices needed immediately; use the host's ordinary user-input mechanism for those.
 ---
 
 # Arachne — Async Decision Loom (MCP Client Skill)
@@ -11,8 +11,10 @@ ruling completes a pending tool call in this very session — no polling, no
 heartbeat management. Optional public links are inert 30-day snapshots served
 by a separate process; they never expose the application origin.
 
-This plugin registers Arachne's shared MCP adapter as server `arachne`. Five
-tools (surfaced as `mcp__plugin_arachne_arachne__<tool>`):
+The Arachne client registration exposes the shared MCP adapter as server
+`arachne`. Five tools are available; Claude's bundled plugin surfaces them as
+`mcp__plugin_arachne_arachne__<tool>`, while a direct Codex registration uses
+`mcp__arachne__<tool>`:
 
 | Tool | Effect |
 |------|--------|
@@ -33,12 +35,20 @@ tools (surfaced as `mcp__plugin_arachne_arachne__<tool>`):
 
 ## The Cursor
 
-The durable wake cursor is shared with the shell client and resolved by the
-same rule as `bin/arm-wake.sh`: `$ARACHNE_CURSOR_FILE` if set, else
-`${XDG_STATE_HOME:-$HOME/.local/state}/arachne/cursor`. A missing file means
-`0`. Read it before waiting; write the `cursor` returned by `wait_for_ruling`
-back to the file **after acting on the ruling** — replaying a ruling is safe,
-losing one is not. Never hand-edit it otherwise.
+The durable wake cursor belongs to one consumer, not to the shared mailbox.
+Resolve it in this order:
+
+1. `$ARACHNE_CURSOR_FILE`, when explicitly set.
+2. In Codex, when `$CODEX_THREAD_ID` is set,
+   `${XDG_STATE_HOME:-$HOME/.local/state}/arachne/cursors/codex-$CODEX_THREAD_ID`.
+3. The legacy single-consumer path
+   `${XDG_STATE_HOME:-$HOME/.local/state}/arachne/cursor`.
+
+Use an owner-only `cursors/` directory and cursor file. A missing file means
+`0`. Read it before waiting; write the `cursor` returned by
+`wait_for_ruling` back to the file **after acting on or deliberately routing
+the ruling** — replaying a ruling is safe, losing one is not. Never share one
+cursor file between concurrent agent sessions and never hand-edit it otherwise.
 
 ## Workflow
 
@@ -73,14 +83,13 @@ losing one is not. Never hand-edit it otherwise.
    is in the result): no-arg lands on the inbox; `bootstrap_url(page)`
    deep-links one brief. The ticket rides in the URL fragment and never
    appears in logs.
-4. **Arm the wake** — call `wait_for_ruling(since=<cursor>)` and then end
-   your turn (or continue other work). This is a long MCP call: the harness
-   auto-backgrounds it into a task after a couple of minutes, the server's
-   progress heartbeats keep the idle timeout at bay, and the adapter itself
-   rides through the core's long-poll cycles and outages with backoff. When
-   the human submits, the call completes with `{cursor, ruling}` and you are
-   re-invoked. Do NOT poll `status` in a loop and do NOT schedule wakeups —
-   the completing call IS the wake.
+4. **Arm the wake** — call `wait_for_ruling(since=<cursor>)` and leave that MCP
+   call pending while the human reviews (you may continue other independent
+   work first). The server's progress heartbeats keep the tool timeout alive,
+   and the adapter rides through the core's long-poll cycles and outages with
+   backoff. When the human submits, the call completes with
+   `{cursor, ruling}` and the same session resumes. Do NOT poll `status` in a
+   loop and do NOT schedule wakeups — the completing call IS the wake.
 5. **On wake** — act on `ruling` (`issue`, `markdown`, `form`,
    `submitted_at`), then persist the returned `cursor`. More decisions
    pending? Wait again with the new cursor — each `wait_for_ruling` returns
@@ -164,9 +173,9 @@ capability expires automatically after 30 days.
 
 ## Gotchas
 
-- **Permissions.** Unprompted auto-mode use requires
-  `"mcp__plugin_arachne_arachne__*"` in `permissions.allow` (user settings).
-  The `mcp__plugin_...` prefix is specific to plugin-bundled servers.
+- **Permissions.** Claude's plugin-bundled server requires
+  `"mcp__plugin_arachne_arachne__*"` in `permissions.allow`. Codex uses the
+  direct `mcp__arachne__...` registration and its MCP approval settings.
 - **Token.** The connect-time helper resolves
   `${XDG_STATE_HOME:-$HOME/.local/state}/arachne/auth-token` (override:
   `ARACHNE_TOKEN_FILE`, or set it in `~/.config/arachne/env`). The token file

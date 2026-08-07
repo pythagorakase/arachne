@@ -174,6 +174,7 @@ arachne/
   bin/bootstrap-url.py ← establishes an authenticated browser session
   bin/publish-page.py ← enforces the v2 brief contract at publication
   bin/install-cron.sh ← idempotently installs the watchdog schedule
+  bin/install-codex-client-support.sh ← installs the Codex skill + login token bridge
   keepalive.sh     ← cron health-check / restart (per DEPLOY)
   pages/           ← served decision pages (content; git-ignored by default)
   tests/           ← real-process end-to-end acceptance tests

@@ -7,6 +7,7 @@ import shutil
 import signal
 import ssl
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -188,6 +189,83 @@ class WakeSignalTests(unittest.TestCase):
             stdout, stderr = process.communicate(timeout=3)
             self.assertEqual(process.returncode, 143, (stdout, stderr))
             self.assertEqual(list(tmp_dir.glob("arachne-wake.*")), [])
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS launchctl integration")
+class CodexClientSupportTests(unittest.TestCase):
+    def fake_launchctl(self, root: Path) -> Path:
+        script = root / "launchctl"
+        script.write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$@" > "$ARACHNE_LAUNCHCTL_CAPTURE"\n',
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+        return script
+
+    def test_token_export_validates_and_sets_gui_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            token = root / "auth-token"
+            token.write_text("A" * 44 + "\n", encoding="ascii")
+            token.chmod(0o600)
+            capture = root / "arguments"
+            result = run_bash(
+                REPO / "bin/export-codex-mcp-token.sh",
+                {
+                    **os.environ,
+                    "ARACHNE_TOKEN_FILE": str(token),
+                    "ARACHNE_LAUNCHCTL": str(self.fake_launchctl(root)),
+                    "ARACHNE_LAUNCHCTL_CAPTURE": str(capture),
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                capture.read_text(encoding="utf-8").splitlines(),
+                ["setenv", "ARACHNE_MCP_TOKEN", "A" * 44],
+            )
+
+    def test_token_export_rejects_group_readable_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            token = root / "auth-token"
+            token.write_text("A" * 44 + "\n", encoding="ascii")
+            token.chmod(0o640)
+            result = run_bash(
+                REPO / "bin/export-codex-mcp-token.sh",
+                {
+                    **os.environ,
+                    "ARACHNE_TOKEN_FILE": str(token),
+                    "ARACHNE_LAUNCHCTL": str(self.fake_launchctl(root)),
+                    "ARACHNE_LAUNCHCTL_CAPTURE": str(root / "arguments"),
+                },
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("group or other access", result.stderr)
+
+    def test_installer_links_skill_and_writes_secret_free_plist(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            skill_root = root / "skills"
+            agents_dir = root / "LaunchAgents"
+            result = run_bash(
+                REPO / "bin/install-codex-client-support.sh",
+                {
+                    **os.environ,
+                    "HOME": temporary,
+                    "CODEX_SKILLS_ROOT": str(skill_root),
+                    "ARACHNE_LAUNCH_AGENTS_DIR": str(agents_dir),
+                    "ARACHNE_INSTALL_NO_BOOTSTRAP": "1",
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            skill = skill_root / "arachne"
+            self.assertTrue(skill.is_symlink())
+            self.assertEqual(skill.resolve(), REPO / "plugin/skills/arachne")
+            plist = agents_dir / "com.pythagorakase.arachne.codex-env.plist"
+            self.assertEqual(plist.stat().st_mode & 0o777, 0o600)
+            contents = plist.read_text(encoding="utf-8")
+            self.assertIn(str(REPO / "bin/export-codex-mcp-token.sh"), contents)
+            self.assertNotIn("A" * 32, contents)
 
 
 class BootstrapConfigTests(unittest.TestCase):
