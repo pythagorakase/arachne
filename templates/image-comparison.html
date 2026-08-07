@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en" data-issue="@@ARACHNE_ISSUE@@">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>@@ARACHNE_DOCUMENT_TITLE@@</title>
+<style>
+  :root {
+    color-scheme: dark;
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    background: #090b10;
+    color: #f4eee7;
+    --ink-muted: #b8b0a8;
+    --panel: #11151d;
+    --panel-raised: #171c26;
+    --line: #313947;
+    --accent: #e9a75f;
+    --accent-cool: #79b8c9;
+    --selected: #f3c58f;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0 auto;
+    max-width: 1180px;
+    padding: max(18px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
+      max(34vh, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+    background:
+      radial-gradient(circle at 18% -8%, #262130 0, transparent 34rem),
+      #090b10;
+  }
+  body.lightbox-open { overflow: hidden; }
+  h1, h2, p { margin-top: 0; }
+  .brief-header {
+    padding: clamp(20px, 5vw, 52px) 2px clamp(26px, 6vw, 60px);
+  }
+  .eyebrow {
+    margin-bottom: 8px;
+    color: var(--accent);
+    font-size: .75rem;
+    font-weight: 760;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+  }
+  h1 {
+    max-width: 18ch;
+    margin-bottom: 14px;
+    font-size: clamp(2rem, 7vw, 4.7rem);
+    line-height: .98;
+    letter-spacing: -.045em;
+  }
+  .instructions {
+    max-width: 64ch;
+    color: var(--ink-muted);
+    font-size: clamp(1rem, 2.1vw, 1.2rem);
+    line-height: 1.55;
+  }
+  .pose {
+    min-height: 88vh;
+    margin: 0 0 34px;
+    padding: clamp(15px, 3vw, 30px);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    box-shadow: 0 26px 70px rgb(0 0 0 / 24%);
+    scroll-margin-top: 12px;
+  }
+  .pose-header { margin-bottom: 18px; }
+  h2 {
+    margin-bottom: 8px;
+    font-size: clamp(1.55rem, 4vw, 2.6rem);
+    letter-spacing: -.025em;
+  }
+  .pose-note {
+    max-width: 70ch;
+    margin-bottom: 0;
+    color: var(--ink-muted);
+    line-height: 1.45;
+  }
+  .matchup {
+    min-width: 0;
+    margin: 0 0 22px;
+    padding: 0;
+    border: 0;
+  }
+  .matchup legend {
+    width: 100%;
+    margin-bottom: 10px;
+    color: var(--ink-muted);
+    font-size: .78rem;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .pair {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: clamp(8px, 2vw, 18px);
+  }
+  .option-shell {
+    position: relative;
+    min-width: 0;
+    border-radius: 16px;
+    background: var(--panel-raised);
+  }
+  .option-card {
+    position: relative;
+    display: grid;
+    min-width: 0;
+    overflow: hidden;
+    border: 2px solid var(--line);
+    border-radius: 16px;
+    background: #0d1016;
+    cursor: pointer;
+    transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .option-card:active { transform: scale(.995); }
+  .option-card:has(.choice-input:checked) {
+    border-color: var(--selected);
+    box-shadow: 0 0 0 3px rgb(243 197 143 / 20%);
+  }
+  .choice-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    opacity: 0;
+  }
+  .choice-input:focus-visible + .option-letter {
+    outline: 3px solid var(--accent-cool);
+    outline-offset: 3px;
+  }
+  .option-letter {
+    position: absolute;
+    z-index: 2;
+    top: 9px;
+    left: 9px;
+    display: grid;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    border: 1px solid rgb(255 255 255 / 28%);
+    border-radius: 999px;
+    background: rgb(5 7 10 / 82%);
+    color: white;
+    font-size: 1rem;
+    font-weight: 850;
+    backdrop-filter: blur(8px);
+  }
+  .image-frame {
+    display: grid;
+    height: clamp(330px, 62vh, 760px);
+    place-items: center;
+    overflow: hidden;
+    background: #050609;
+  }
+  .image-frame img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  .choose-label {
+    padding: 14px 12px;
+    color: #eee7df;
+    font-size: .94rem;
+    font-weight: 720;
+    text-align: center;
+  }
+  .option-card:has(.choice-input:checked) .choose-label {
+    background: rgb(233 167 95 / 13%);
+    color: var(--selected);
+  }
+  .zoom-button {
+    position: absolute;
+    z-index: 3;
+    top: 9px;
+    right: 9px;
+    min-height: 34px;
+    padding: 0 11px;
+    border: 1px solid rgb(255 255 255 / 28%);
+    border-radius: 999px;
+    background: rgb(5 7 10 / 82%);
+    color: white;
+    font: inherit;
+    font-size: .72rem;
+    font-weight: 720;
+    backdrop-filter: blur(8px);
+  }
+  .comment-label {
+    display: block;
+    margin: 28px 0 8px;
+    color: var(--ink-muted);
+    font-size: .84rem;
+    font-weight: 700;
+  }
+  textarea {
+    width: 100%;
+    min-height: 92px;
+    resize: vertical;
+    padding: 13px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    outline: 0;
+    background: #090c11;
+    color: inherit;
+    font: inherit;
+    line-height: 1.45;
+  }
+  textarea:focus { border-color: var(--accent-cool); }
+  .lightbox[hidden] { display: none; }
+  .lightbox {
+    position: fixed;
+    z-index: 20;
+    inset: 0;
+    display: grid;
+    padding: max(54px, env(safe-area-inset-top)) 10px max(14px, env(safe-area-inset-bottom));
+    place-items: center;
+    background: rgb(0 0 0 / 94%);
+  }
+  .lightbox img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    max-height: calc(100vh - 76px);
+    object-fit: contain;
+  }
+  .lightbox-close {
+    position: absolute;
+    top: max(10px, env(safe-area-inset-top));
+    right: max(10px, env(safe-area-inset-right));
+    min-width: 44px;
+    min-height: 38px;
+    border: 1px solid #555;
+    border-radius: 999px;
+    background: #15171d;
+    color: white;
+    font: inherit;
+    font-weight: 750;
+  }
+  @media (max-width: 560px) {
+    body {
+      padding-left: max(9px, env(safe-area-inset-left));
+      padding-right: max(9px, env(safe-area-inset-right));
+    }
+    .brief-header { padding-left: 5px; padding-right: 5px; }
+    .pose { min-height: 84vh; padding: 13px; border-radius: 15px; }
+    .pair { gap: 7px; }
+    .option-shell, .option-card { border-radius: 11px; }
+    .image-frame { height: clamp(250px, 48vh, 470px); }
+    .option-letter { top: 6px; left: 6px; width: 30px; height: 30px; }
+    .zoom-button { top: 6px; right: 6px; min-height: 30px; padding: 0 8px; font-size: .66rem; }
+    .choose-label { padding: 11px 5px; font-size: .82rem; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .option-card { transition: none; }
+  }
+</style>
+</head>
+<body>
+<header class="brief-header">
+  <p class="eyebrow">Blind reference review · @@ARACHNE_SUBJECT@@</p>
+  <h1>@@ARACHNE_HEADING@@</h1>
+  <p class="instructions">@@ARACHNE_INSTRUCTIONS@@</p>
+</header>
+<main>
+@@ARACHNE_SECTIONS@@
+</main>
+
+<div class="lightbox" data-review-lightbox hidden role="dialog" aria-modal="true"
+  aria-label="Expanded candidate preview">
+  <button class="lightbox-close" type="button" data-review-lightbox-close>Close</button>
+  <img data-review-lightbox-image alt="Expanded candidate preview">
+</div>
+
+<script id="arachne-review-assets" type="application/json">@@ARACHNE_ASSETS_JSON@@</script>
+<script id="arachne-review-model" type="application/json">@@ARACHNE_REVIEW_JSON@@</script>
+<script data-arachne-image-comparison>
+(() => {
+  "use strict";
+
+  const assets = JSON.parse(document.getElementById("arachne-review-assets").textContent);
+  const review = JSON.parse(document.getElementById("arachne-review-model").textContent);
+  for (const image of document.querySelectorAll("img[data-review-image]")) {
+    const source = assets[image.dataset.reviewImage];
+    if (source) image.src = source;
+  }
+
+  const lightbox = document.querySelector("[data-review-lightbox]");
+  const lightboxImage = document.querySelector("[data-review-lightbox-image]");
+  let returnFocus = null;
+  function closeLightbox() {
+    if (lightbox.hidden) return;
+    lightbox.hidden = true;
+    lightboxImage.removeAttribute("src");
+    document.body.classList.remove("lightbox-open");
+    returnFocus?.focus();
+    returnFocus = null;
+  }
+  for (const button of document.querySelectorAll("[data-review-zoom]")) {
+    button.addEventListener("click", () => {
+      const source = assets[button.dataset.reviewZoom];
+      if (!source) return;
+      returnFocus = button;
+      lightboxImage.src = source;
+      lightboxImage.alt = button.dataset.reviewZoomAlt || "Expanded candidate preview";
+      lightbox.hidden = false;
+      document.body.classList.add("lightbox-open");
+      document.querySelector("[data-review-lightbox-close]").focus();
+    });
+  }
+  document.querySelector("[data-review-lightbox-close]").addEventListener("click", closeLightbox);
+  lightbox.addEventListener("click", (event) => {
+    if (event.target === lightbox) closeLightbox();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeLightbox();
+  });
+
+  window.arachneCaptureHooks = Object.freeze({
+    isAnswered(element) {
+      const matchups = Array.from(element.querySelectorAll("[data-review-matchup]"));
+      return (
+        matchups.length > 0 &&
+        matchups.every((matchup) => matchup.querySelector('input[type="radio"]:checked'))
+      );
+    },
+    composeMarkdown(form) {
+      const lines = [`# ${review.title}`, ""];
+      for (const pose of review.poses) {
+        lines.push(`## ${pose.label}`);
+        const wins = new Map();
+        pose.matchups.forEach((matchup, index) => {
+          const chosen = String(form[matchup.field] || "");
+          const side = chosen === matchup.left ? "A" : chosen === matchup.right ? "B" : "unanswered";
+          lines.push(`- Comparison ${index + 1}: ${side}${chosen ? ` (${chosen})` : ""}`);
+          if (chosen) wins.set(chosen, (wins.get(chosen) || 0) + 1);
+        });
+        const ranked = Array.from(wins.entries()).sort(
+          (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+        );
+        if (ranked.length) {
+          const leaders = ranked.filter((entry) => entry[1] === ranked[0][1]);
+          lines.push(
+            leaders.length === 1
+              ? `- Pairwise leader: ${leaders[0][0]} (${leaders[0][1]} win${leaders[0][1] === 1 ? "" : "s"})`
+              : `- Pairwise tie: ${leaders.map((entry) => entry[0]).join(", ")}`,
+          );
+        }
+        const comment = String(form[pose.comment_field] || "").trim();
+        if (comment) {
+          lines.push("", "Comment:", ...comment.split(/\r?\n/).map((line) => `> ${line}`));
+        }
+        lines.push("");
+      }
+      return lines.join("\n").trim();
+    },
+  });
+})();
+</script>
+<script data-arachne-brief-agent>
+@@ARACHNE_BRIEF_AGENT@@
+</script>
+</body>
+</html>

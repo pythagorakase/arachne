@@ -165,11 +165,14 @@ arachne/
   share_store.py   ← owner-only 30-day snapshot storage and revocation
   semantic_snapshot.py ← shared HTML/Markdown semantic serializer
   ui/              ← importable inbox/bootstrap HTML, CSS, and render boundary
+  templates/       ← reusable producer-side decision brief templates
+  image_review.py  ← blinded A/B image-review renderer and provenance builder
   mcp_server.py    ← authenticated Streamable HTTP MCP adapter
   page_contract.py ← shared validation and atomic publication boundary
   bin/arm-wake.sh  ← the agent-side wake loop (per SPEC)
+  bin/build-image-review.py ← builds one image-review mail item per subject
   bin/bootstrap-url.py ← establishes an authenticated browser session
-  bin/publish-page.py ← enforces relative POST + localStorage at publish
+  bin/publish-page.py ← enforces the v2 brief contract at publication
   bin/install-cron.sh ← idempotently installs the watchdog schedule
   keepalive.sh     ← cron health-check / restart (per DEPLOY)
   pages/           ← served decision pages (content; git-ignored by default)
@@ -205,12 +208,27 @@ bin/bootstrap-url.py --base-url http://127.0.0.1:8788 --open \
 ```
 
 Publish an existing decision page through the contract checker first. It
-rewrites the old absolute loopback endpoint to same-origin `/ruling` and fails
-loud if the page does not preserve in-progress state:
+rejects legacy direct capture or draft-storage code and validates every
+substantive visual's semantic alternative:
 
 ```bash
 bin/publish-page.py /path/to/decision_476_relationship_drift.html
 ```
+
+To build a blind image-review brief, provide one manifest per subject. Every
+pose with two candidates becomes one A/B ballot; three candidates become a
+three-pair round-robin on the same pose page. The builder randomizes matchup
+order and left/right placement once, embeds compact metadata-free previews,
+and writes the private source mapping separately:
+
+```bash
+bin/build-image-review.py manifest.json decision_character_review.html
+bin/publish-page.py decision_character_review.html
+```
+
+The manifest schema and privacy boundary are documented in
+[`templates/README.md`](./templates/README.md). The server, inbox, ruling
+storage, and wake protocol remain generic.
 
 Successful `POST /ruling` responses retain the acknowledgement expected by the
 existing NEXUS decision pages: `{"ok": true, "filed": "<markdown file>"}`.
