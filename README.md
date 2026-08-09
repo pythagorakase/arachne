@@ -233,6 +233,10 @@ The manifest schema and privacy boundary are documented in
 [`templates/README.md`](./templates/README.md). The server, inbox, ruling
 storage, and wake protocol remain generic.
 
+- For an independently rated blinded image set, build the sibling rating brief
+  with `bin/build-image-rating.py manifest.json decision_character_rating.html`;
+  its source mapping is written to a private provenance sidecar.
+
 Successful `POST /ruling` responses retain the acknowledgement expected by the
 existing NEXUS decision pages: `{"ok": true, "filed": "<markdown file>"}`.
 The same response also includes the durable entry's sequence, timestamps,
