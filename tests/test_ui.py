@@ -899,9 +899,36 @@ assert.equal(rulingMatchesPendingToken(ruling, "another-send"), false);
             r"""
 const assert = require("node:assert/strict");
 const {
+  hasOtherAwaitingBriefForIssue,
   isValidDismissalResponse,
   readDismissalAcknowledgement,
 } = require("./ui/inbox.js");
+
+const current = {
+  dataset: {briefIssue: "shared", briefStatus: "awaiting"},
+};
+const otherAwaiting = {
+  dataset: {briefIssue: "shared", briefStatus: "awaiting"},
+};
+const otherArchived = {
+  dataset: {briefIssue: "shared", briefStatus: "archived"},
+};
+assert.equal(
+  hasOtherAwaitingBriefForIssue([current, otherAwaiting], current, "shared"),
+  true,
+);
+assert.equal(
+  hasOtherAwaitingBriefForIssue([current, otherArchived], current, "shared"),
+  false,
+);
+assert.equal(
+  hasOtherAwaitingBriefForIssue(
+    [current, {dataset: {briefIssue: "different", briefStatus: "awaiting"}}],
+    current,
+    "shared",
+  ),
+  false,
+);
 
 const record = {
   ok: true,

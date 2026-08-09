@@ -280,6 +280,15 @@
     );
   }
 
+  function hasOtherAwaitingBriefForIssue(cards, currentCard, issue) {
+    return cards.some(
+      (card) =>
+        card !== currentCard &&
+        card?.dataset?.briefStatus === "awaiting" &&
+        card.dataset.briefIssue === issue,
+    );
+  }
+
   async function readShareResponse(response) {
     let payload;
     try {
@@ -403,6 +412,7 @@
       isValidBriefRulingMessage,
       isValidDismissalResponse,
       isValidShareResponse,
+      hasOtherAwaitingBriefForIssue,
       isMessageFromCurrentBrief,
       makeCollectMessage,
       makeDraftRecord,
@@ -1460,7 +1470,13 @@
     delete dismissedCard.dataset.dismissalSubmissionError;
     delete dismissedCard.dataset.dismissalSubmissionUncertain;
     const stillSelected = state.card === dismissedCard;
-    const clearWarning = clearDraft(issue, "The brief was dismissed");
+    const clearWarning = hasOtherAwaitingBriefForIssue(
+      allCards(),
+      dismissedCard,
+      issue,
+    )
+      ? ""
+      : clearDraft(issue, "The brief was dismissed");
     archiveCurrentCard(dismissedCard, acknowledgement, stillSelected);
     if (stillSelected) {
       state.filed = true;
