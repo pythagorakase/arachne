@@ -244,6 +244,12 @@ class ArachneEndToEndTests(unittest.TestCase):
                 method="POST",
             ),
             Request(
+                f"{self.service.url}/dismissals",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            ),
+            Request(
                 f"{self.service.url}/shares/{'A' * 32}/revoke",
                 data=b"{}",
                 headers={"Content-Type": "application/json"},
@@ -593,6 +599,136 @@ class ArachneEndToEndTests(unittest.TestCase):
         self.assertIn('data-list-count="awaiting">1</span>', body)
         self.assertIn("Round two", body)
         self.assertIn('data-list-count="archive">0</span>', body)
+
+    def test_dismissal_archives_without_a_ruling_and_republish_reopens(self) -> None:
+        page = self.pages / "decision_476.html"
+        published_at_ms = int(page.stat().st_mtime * 1000)
+        status, dismissal = post_json(
+            self.service.url,
+            "/dismissals",
+            self.service.token,
+            {
+                "page": page.name,
+                "published_at_ms": published_at_ms,
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(
+            dismissal,
+            {
+                "dismissed_at": dismissal["dismissed_at"],
+                "issue": "476",
+                "kind": "dismissal",
+                "ok": True,
+                "page": page.name,
+                "published_at_ms": published_at_ms,
+                "reused": False,
+            },
+        )
+
+        _, health = get_json(f"{self.service.url}/health")
+        self.assertEqual(health["latest_sequence"], 0)
+        self.assertEqual(health["ruling_count"], 0)
+        self.assertEqual(health["dismissal_count"], 1)
+        _, backlog = get_json(
+            f"{self.service.url}/rulings?since=0", token=self.service.token
+        )
+        self.assertEqual(backlog["latest_sequence"], 0)
+        self.assertEqual(backlog["rulings"], [])
+        with urlopen(
+            Request(
+                f"{self.service.url}/wait?since=0",
+                headers=bearer(self.service.token),
+            ),
+            timeout=2,
+        ) as response:
+            self.assertEqual(response.status, 204)
+
+        status, body, _ = self._get_inbox(bearer(self.service.token))
+        self.assertEqual(status, 200)
+        self.assertIn('data-list-count="awaiting">0</span>', body)
+        self.assertIn('data-list-count="archive">1</span>', body)
+        self.assertIn('data-archive-kind="dismissal"', body)
+        self.assertIn('data-ruling-sequence=""', body)
+        self.assertIn("dismissed ", body)
+
+        status, reused = post_json(
+            self.service.url,
+            "/dismissals",
+            self.service.token,
+            {
+                "page": page.name,
+                "published_at_ms": published_at_ms,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertIs(reused["reused"], True)
+        self.assertEqual(reused["dismissed_at"], dismissal["dismissed_at"])
+        self.assertEqual(len(list((self.data / "dismissals").glob("*.json"))), 1)
+
+        self.service.restart()
+        _, body, _ = self._get_inbox(bearer(self.service.token))
+        self.assertIn('data-archive-kind="dismissal"', body)
+        _, health = get_json(f"{self.service.url}/health")
+        self.assertEqual(health["dismissal_count"], 1)
+        self.assertEqual(health["latest_sequence"], 0)
+
+        time.sleep(0.05)
+        page.write_text(
+            "<!doctype html><title>Reopened</title><h1>Again</h1>",
+            encoding="utf-8",
+        )
+        _, body, _ = self._get_inbox(bearer(self.service.token))
+        self.assertIn('data-list-count="awaiting">1</span>', body)
+        self.assertIn('data-list-count="archive">0</span>', body)
+        self.assertIn("Reopened", body)
+
+        with self.assertRaises(HTTPError) as stale:
+            post_json(
+                self.service.url,
+                "/dismissals",
+                self.service.token,
+                {
+                    "page": page.name,
+                    "published_at_ms": published_at_ms,
+                },
+            )
+        self.assertEqual(stale.exception.code, 409)
+        problem = json.load(stale.exception)
+        self.assertEqual(problem["error"], "stale_publication")
+
+    def test_dismissal_rejects_invalid_payloads_and_an_existing_ruling(self) -> None:
+        page = self.pages / "decision_476.html"
+        published_at_ms = int(page.stat().st_mtime * 1000)
+        for payload in (
+            {},
+            {"page": page.name},
+            {"page": page.name, "published_at_ms": True},
+            {"page": page.name, "published_at_ms": published_at_ms, "extra": 1},
+        ):
+            with self.subTest(payload=payload), self.assertRaises(HTTPError) as invalid:
+                post_json(
+                    self.service.url,
+                    "/dismissals",
+                    self.service.token,
+                    payload,
+                )
+            self.assertEqual(invalid.exception.code, 400)
+
+        post_ruling(self.service.url, self.service.token, "476")
+        with self.assertRaises(HTTPError) as ruled:
+            post_json(
+                self.service.url,
+                "/dismissals",
+                self.service.token,
+                {
+                    "page": page.name,
+                    "published_at_ms": published_at_ms,
+                },
+            )
+        self.assertEqual(ruled.exception.code, 409)
+        problem = json.load(ruled.exception)
+        self.assertEqual(problem["error"], "already_ruled")
 
     def test_allowlisted_ui_font_is_authenticated_and_served_as_truetype(self) -> None:
         with self.assertRaises(HTTPError) as unauthenticated:

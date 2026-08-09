@@ -24,7 +24,7 @@
       </button>
       <section class="brief-section" id="archived-briefs"
         data-list-panel="archive" hidden>
-        <h2 class="visually-hidden">Archived rulings</h2>
+        <h2 class="visually-hidden">Archived briefs</h2>
         <ul class="brief-list" data-brief-list="archive">@@ARACHNE_ARCHIVED_ITEMS@@</ul>
       </section>
     </div>
@@ -119,6 +119,9 @@
       <button class="send-ruling" type="button" disabled data-send-ruling>
         SEND RULING
       </button>
+      <button class="dismiss-brief" type="button" disabled data-dismiss-brief>
+        DISMISS BRIEF
+      </button>
       <p class="draft-note" data-draft-note>
         draft persists on this device · decide every part to send
       </p>
@@ -134,6 +137,8 @@
         aria-label="Decision parts" data-ribbon-part-stepper></div>
       <div class="ribbon-footer">
         <span class="ribbon-progress" data-ribbon-progress>0 of 0 decided</span>
+        <button class="ribbon-dismiss" type="button" disabled
+          data-ribbon-dismiss>DISMISS</button>
         <button class="ribbon-send" type="button" disabled
           data-ribbon-send>SEND RULING</button>
       </div>

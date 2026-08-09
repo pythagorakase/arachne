@@ -15,6 +15,9 @@ The storage and wake protocol does not change:
   untouched.
 - A ruling carrying a published page's recorded issue archives that brief;
   republishing it later reopens it.
+- A separate exact-publication dismissal may archive a stale brief without a
+  ruling. It does not enter `RulingStore`, advance a cursor, or wake a waiter;
+  republishing also reopens it.
 
 This is a producer and browser-shell change, not a ruling protocol change.
 
@@ -90,6 +93,9 @@ part.
 The application-owned ruling companion is a `<nav>`, not a second capture
 form. It renders part progress, synchronizes navigation with the framed brief,
 persists device-local drafts, and is the only browser code that POSTs a ruling.
+It also owns a two-step **Dismiss brief** action for obsolete briefs. That
+action posts the selected page name and its server-rendered publication token
+to `/dismissals`; it never asks the brief iframe for a capture.
 
 Send uses a fresh request/response handshake rather than the last animation-
 frame-batched capture:

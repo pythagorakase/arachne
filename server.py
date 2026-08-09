@@ -562,6 +562,91 @@ class RulingStore:
             return entry
 
 
+class DismissalStore:
+    """Durable, idempotent archives that are explicitly not rulings."""
+
+    def __init__(self, data_dir: Path) -> None:
+        self.dismissals_dir = data_dir / "dismissals"
+        self.dismissals_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._lock = threading.Lock()
+        self._entries = self._load_entries()
+
+    def _load_entries(self) -> dict[tuple[str, str, int], dict[str, Any]]:
+        entries: dict[tuple[str, str, int], dict[str, Any]] = {}
+        for path in sorted(self.dismissals_dir.glob("*.json")):
+            try:
+                entry = json.loads(path.read_text(encoding="utf-8"))
+                page = entry["page"]
+                issue = entry["issue"]
+                published_at_ms = entry["published_at_ms"]
+                dismissed_at = entry["dismissed_at"]
+            except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+                raise RuntimeError(f"cannot load persisted dismissal {path}: {exc}") from exc
+            if not isinstance(page, str) or PAGE_NAME.fullmatch(page) is None:
+                raise RuntimeError(f"invalid page in persisted dismissal {path}")
+            if not isinstance(issue, str) or not issue or len(issue) > 200:
+                raise RuntimeError(f"invalid issue in persisted dismissal {path}")
+            if (
+                not isinstance(published_at_ms, int)
+                or isinstance(published_at_ms, bool)
+                or published_at_ms < 0
+            ):
+                raise RuntimeError(
+                    f"invalid publication time in persisted dismissal {path}"
+                )
+            if _parse_submitted_at(dismissed_at) is None:
+                raise RuntimeError(
+                    f"invalid dismissal time in persisted dismissal {path}"
+                )
+            key = (page, issue, published_at_ms)
+            if key in entries:
+                raise RuntimeError(
+                    f"duplicate persisted dismissal for {page} at {published_at_ms}"
+                )
+            entries[key] = entry
+        return entries
+
+    @property
+    def count(self) -> int:
+        with self._lock:
+            return len(self._entries)
+
+    def get(
+        self, page: str, issue: str, published_at_ms: int
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            entry = self._entries.get((page, issue, published_at_ms))
+            return dict(entry) if entry is not None else None
+
+    def dismiss(
+        self, page: str, issue: str, published_at_ms: int
+    ) -> tuple[dict[str, Any], bool]:
+        """Persist one exact-publication dismissal; return ``(entry, reused)``."""
+
+        key = (page, issue, published_at_ms)
+        with self._lock:
+            existing = self._entries.get(key)
+            if existing is not None:
+                return dict(existing), True
+            entry: dict[str, Any] = {
+                "page": page,
+                "issue": issue,
+                "published_at_ms": published_at_ms,
+                "dismissed_at": _utc_now(),
+            }
+            page_digest = hashlib.sha256(page.encode("utf-8")).hexdigest()[:12]
+            name = (
+                f"{published_at_ms:020d}-{_safe_issue_slug(issue)}-"
+                f"{page_digest}.json"
+            )
+            body = (
+                json.dumps(entry, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            ).encode("utf-8")
+            _atomic_write(self.dismissals_dir / name, body)
+            self._entries[key] = entry
+            return dict(entry), False
+
+
 class ArachneServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -571,6 +656,7 @@ class ArachneServer(ThreadingHTTPServer):
     ) -> None:
         self.config = config
         self.store = store
+        self.dismissals = DismissalStore(config.data_dir)
         self.authentication = authentication
         self.share_store = ShareStore(config.share_dir or config.data_dir / "shares")
         if (config.tls_cert_file is None) != (config.tls_key_file is None):
@@ -775,6 +861,7 @@ class ArachneHandler(BaseHTTPRequestHandler):
             "ok": True,
             "latest_sequence": self.arachne.store.latest_sequence,
             "ruling_count": self.arachne.store.count,
+            "dismissal_count": self.arachne.dismissals.count,
             "bound_host": LOOPBACK_HOST,
             "port": self.arachne.server_port,
             "tls": self.arachne.tls_enabled,
@@ -1019,9 +1106,10 @@ class ArachneHandler(BaseHTTPRequestHandler):
         """Split allowlisted pages into pending and archived, both derived.
 
         A page is archived when a ruling carrying its issue token was filed at
-        or after the page's publication time; filing a ruling therefore *is*
-        the archive action, and re-publishing a page for the same issue
-        returns it to pending. No mutable inbox state exists to maintain.
+        or after the page's publication time, or when its exact publication was
+        explicitly dismissed. A dismissal is not a ruling and never enters the
+        ruling sequence. Re-publishing changes the publication identity and
+        returns either kind of archived page to pending.
         """
 
         _, summaries = self.arachne.store.summaries_after(0)
@@ -1050,7 +1138,8 @@ class ArachneHandler(BaseHTTPRequestHandler):
             # at millisecond precision, so comparing against a finer-grained
             # mtime would let a ruling filed later in the same millisecond
             # appear to precede its page's publication and never archive it.
-            published_at = int(candidate.stat().st_mtime * 1000) / 1000
+            published_at_ms = int(candidate.stat().st_mtime * 1000)
+            published_at = published_at_ms / 1000
             # The issue recorded at publication is authoritative; filename
             # inference remains only as a fallback for pre-metadata pages.
             issue = read_page_issue(pages_dir, name) or _page_issue(name)
@@ -1059,6 +1148,7 @@ class ArachneHandler(BaseHTTPRequestHandler):
                 "issue": issue,
                 "title": page_title(candidate) or fallback_title(name, issue),
                 "published_at": published_at,
+                "published_at_ms": published_at_ms,
             }
             filed = [
                 (moment, sequence)
@@ -1071,11 +1161,24 @@ class ArachneHandler(BaseHTTPRequestHandler):
                 )
                 entry["ruled_at"] = ruled_at
                 entry["ruling_sequence"] = ruling_sequence
+                entry["archive_kind"] = "ruling"
+                entry["archived_at"] = ruled_at
                 archived.append(entry)
-            else:
-                pending.append(entry)
+                continue
+            dismissal = self.arachne.dismissals.get(
+                name, issue, published_at_ms
+            )
+            if dismissal is not None:
+                dismissed_at = _parse_submitted_at(dismissal["dismissed_at"])
+                assert dismissed_at is not None
+                entry["dismissed_at"] = dismissed_at
+                entry["archive_kind"] = "dismissal"
+                entry["archived_at"] = dismissed_at
+                archived.append(entry)
+                continue
+            pending.append(entry)
         pending.sort(key=lambda entry: entry["published_at"], reverse=True)
-        archived.sort(key=lambda entry: entry["ruling_sequence"], reverse=True)
+        archived.sort(key=lambda entry: entry["archived_at"], reverse=True)
         return pending, archived
 
     def _post(self) -> None:
@@ -1095,6 +1198,10 @@ class ArachneHandler(BaseHTTPRequestHandler):
         if path == "/shares" and not parsed.query:
             self._require_authentication()
             self._create_share()
+            return
+        if path == "/dismissals" and not parsed.query:
+            self._require_authentication()
+            self._dismiss_page()
             return
         share_revoke = re.fullmatch(
             r"/shares/([A-Za-z0-9_-]{32})/revoke", path
@@ -1152,6 +1259,74 @@ class ArachneHandler(BaseHTTPRequestHandler):
             }
         )
         self._json(HTTPStatus.CREATED, acknowledgement)
+
+    def _dismiss_page(self) -> None:
+        payload = self._read_json_payload("POST /dismissals", "dismissal")
+        if not isinstance(payload, dict) or set(payload) != {
+            "page",
+            "published_at_ms",
+        }:
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_dismissal",
+                "the dismissal request must contain only page and published_at_ms",
+            )
+        page = payload.get("page")
+        published_at_ms = payload.get("published_at_ms")
+        if not isinstance(page, str):
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_dismissal",
+                "'page' must name a published decision page",
+            )
+        if (
+            not isinstance(published_at_ms, int)
+            or isinstance(published_at_ms, bool)
+            or published_at_ms < 0
+        ):
+            raise ClientProblem(
+                HTTPStatus.BAD_REQUEST,
+                "invalid_dismissal",
+                "'published_at_ms' must be a non-negative integer",
+            )
+        candidate = self._page_candidate(page)
+        current_published_at_ms = int(candidate.stat().st_mtime * 1000)
+        if published_at_ms != current_published_at_ms:
+            raise ClientProblem(
+                HTTPStatus.CONFLICT,
+                "stale_publication",
+                "the brief was republished; reload before dismissing its current version",
+            )
+        issue = read_page_issue(self.arachne.config.pages_dir, page) or _page_issue(page)
+        published_at = published_at_ms / 1000
+        _, summaries = self.arachne.store.summaries_after(0)
+        already_ruled = any(
+            str(summary["issue"]) == issue
+            and (_parse_submitted_at(summary.get("submitted_at")) or -1)
+            >= published_at
+            for summary in summaries
+        )
+        if already_ruled:
+            raise ClientProblem(
+                HTTPStatus.CONFLICT,
+                "already_ruled",
+                "the current brief publication already has a ruling",
+            )
+        entry, reused = self.arachne.dismissals.dismiss(
+            page, issue, published_at_ms
+        )
+        self._json(
+            HTTPStatus.OK if reused else HTTPStatus.CREATED,
+            {
+                "ok": True,
+                "kind": "dismissal",
+                "page": page,
+                "issue": issue,
+                "published_at_ms": published_at_ms,
+                "dismissed_at": entry["dismissed_at"],
+                "reused": reused,
+            },
+        )
 
     def _share_payload(self, share: Share, *, reused: bool) -> dict[str, Any]:
         public_url = self.arachne.config.share_public_url
@@ -1455,6 +1630,7 @@ def main() -> int:
         "data_dir": str(config.data_dir),
         "token_file": str(config.token_file),
         "latest_sequence": store.latest_sequence,
+        "dismissal_count": server.dismissals.count,
         "tls": server.tls_enabled,
     }
     print(json.dumps(startup, sort_keys=True), flush=True)

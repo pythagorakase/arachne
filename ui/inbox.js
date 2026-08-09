@@ -6,6 +6,7 @@
   const CHROME_MESSAGE_SOURCE = "arachne-chrome";
   const COLLECT_TIMEOUT_MS = 1500;
   const PENDING_SCROLL_TIMEOUT_MS = 700;
+  const DISMISS_CONFIRM_MS = 8000;
   const LIST_MIN = 240;
   const LIST_MAX = 440;
   const NAV_MIN = 260;
@@ -254,6 +255,31 @@
     return true;
   }
 
+  function isValidDismissalResponse(data) {
+    return (
+      hasExactKeys(data, [
+        "dismissed_at",
+        "issue",
+        "kind",
+        "ok",
+        "page",
+        "published_at_ms",
+        "reused",
+      ]) &&
+      data.ok === true &&
+      data.kind === "dismissal" &&
+      typeof data.page === "string" &&
+      data.page.length > 0 &&
+      typeof data.issue === "string" &&
+      data.issue.length > 0 &&
+      Number.isSafeInteger(data.published_at_ms) &&
+      data.published_at_ms >= 0 &&
+      typeof data.dismissed_at === "string" &&
+      Number.isFinite(Date.parse(data.dismissed_at)) &&
+      typeof data.reused === "boolean"
+    );
+  }
+
   async function readShareResponse(response) {
     let payload;
     try {
@@ -312,6 +338,50 @@
     return acknowledgement;
   }
 
+  async function readDismissalAcknowledgement(
+    response,
+    submittedPage,
+    submittedIssue,
+    submittedPublishedAtMs,
+  ) {
+    let acknowledgement;
+    try {
+      acknowledgement = await response.json();
+    } catch (error) {
+      const bodyKind = response.ok ? "acknowledgement" : "error response";
+      throw new AmbiguousSubmissionError(
+        `HTTP ${response.status} dismissal ${bodyKind} was not valid JSON: ${error.message}`,
+      );
+    }
+    if (!response.ok) {
+      const detail =
+        acknowledgement && typeof acknowledgement.detail === "string"
+          ? acknowledgement.detail.trim()
+          : "";
+      if (detail) {
+        throw new DefinitelyNotFiledError(detail, response.status);
+      }
+      throw new AmbiguousSubmissionError(
+        `the server returned HTTP ${response.status} without a readable dismissal error detail`,
+      );
+    }
+    if (!isValidDismissalResponse(acknowledgement)) {
+      throw new AmbiguousSubmissionError(
+        "the server returned an invalid dismissal acknowledgement",
+      );
+    }
+    if (
+      acknowledgement.page !== submittedPage ||
+      acknowledgement.issue !== submittedIssue ||
+      acknowledgement.published_at_ms !== submittedPublishedAtMs
+    ) {
+      throw new AmbiguousSubmissionError(
+        "the dismissal acknowledgement does not match the submitted brief publication",
+      );
+    }
+    return acknowledgement;
+  }
+
   function submissionFailureKind(error) {
     return error instanceof DefinitelyNotFiledError
       ? "definitely-not-filed"
@@ -331,11 +401,13 @@
       isValidBriefCaptureMessage,
       isValidBriefInViewMessage,
       isValidBriefRulingMessage,
+      isValidDismissalResponse,
       isValidShareResponse,
       isMessageFromCurrentBrief,
       makeCollectMessage,
       makeDraftRecord,
       readRulingAcknowledgement,
+      readDismissalAcknowledgement,
       readShareResponse,
       rulingMatchesPendingToken,
       shouldAcceptInViewReport,
@@ -428,12 +500,14 @@
   const meterFill = required("[data-nav-meter-fill]");
   const meterLabel = required("[data-nav-meter-label]");
   const sendButton = required("[data-send-ruling]");
+  const dismissButton = required("[data-dismiss-brief]");
   const draftNote = required("[data-draft-note]");
   const ribbon = required("[data-ruling-ribbon]");
   const ribbonMessage = required("[data-ribbon-message]");
   const ribbonBody = required("[data-ribbon-body]");
   const ribbonStepper = required("[data-ribbon-part-stepper]");
   const ribbonProgress = required("[data-ribbon-progress]");
+  const ribbonDismissButton = required("[data-ribbon-dismiss]");
   const ribbonSendButton = required("[data-ribbon-send]");
 
   const captureByCard = new WeakMap();
@@ -451,6 +525,9 @@
     pendingDraft: null,
     pendingCollect: null,
     submitting: false,
+    dismissing: false,
+    dismissArmed: false,
+    dismissArmTimer: null,
     filed: false,
     storageWarning: "",
     notice: "",
@@ -466,6 +543,25 @@
   let foregroundAgeStartedAt = Date.now();
   let reloadRequested = false;
   let staleReloadPending = false;
+
+  function cancelDismissConfirmation() {
+    if (state.dismissArmTimer !== null) {
+      window.clearTimeout(state.dismissArmTimer);
+      state.dismissArmTimer = null;
+    }
+    state.dismissArmed = false;
+  }
+
+  function armDismissConfirmation() {
+    cancelDismissConfirmation();
+    state.dismissArmed = true;
+    state.dismissArmTimer = window.setTimeout(() => {
+      state.dismissArmTimer = null;
+      state.dismissArmed = false;
+      renderCompanion();
+    }, DISMISS_CONFIRM_MS);
+    renderCompanion();
+  }
 
   function allCards() {
     return Array.from(shell.querySelectorAll("[data-brief-name]"));
@@ -632,6 +728,7 @@
 
   function resetCompanion(text) {
     clearPendingScroll();
+    cancelDismissConfirmation();
     state.capture = null;
     state.activePartId = null;
     state.storageWarning = "";
@@ -649,11 +746,19 @@
     sendButton.classList.remove("is-filed");
     sendButton.textContent = "SEND RULING";
     sendButton.title = "Select a brief to begin a ruling";
+    dismissButton.hidden = false;
+    dismissButton.disabled = true;
+    dismissButton.textContent = "DISMISS BRIEF";
+    dismissButton.title = "Select a brief to dismiss";
     ribbonSendButton.hidden = false;
     ribbonSendButton.disabled = true;
     ribbonSendButton.classList.remove("is-filed");
     ribbonSendButton.textContent = "SEND RULING";
     ribbonSendButton.title = sendButton.title;
+    ribbonDismissButton.hidden = false;
+    ribbonDismissButton.disabled = true;
+    ribbonDismissButton.textContent = "DISMISS";
+    ribbonDismissButton.title = dismissButton.title;
     draftNote.textContent =
       "draft persists on this device · decide every part to send";
     navTitle.textContent = state.card?.dataset.briefTitle || "Select a brief";
@@ -664,15 +769,22 @@
     const issue = card.dataset.briefIssue || "";
     const title = card.dataset.briefTitle || "Untitled decision";
     const archived = card.dataset.briefStatus === "archived";
+    const dismissed = archived && card.dataset.archiveKind === "dismissal";
     breadcrumb.textContent = `DECISION #${issue} — ${title}`;
     phoneReadingContext.textContent = `#${issue} · ${title}`;
-    readingStatus.textContent = archived ? "ARCHIVED" : "AWAITING";
+    readingStatus.textContent = dismissed
+      ? "DISMISSED"
+      : archived
+        ? "ARCHIVED"
+        : "AWAITING";
     readingStatus.hidden = false;
     readingMetaIssue.textContent = `#${issue}`;
     readingMetaTitle.textContent = title;
-    readingMetaDetail.textContent = archived && card.dataset.rulingSequence
-      ? `${card.dataset.briefTimestamp || ""} · ruling ${card.dataset.rulingSequence}`
-      : card.dataset.briefTimestamp || "";
+    readingMetaDetail.textContent = dismissed
+      ? `${card.dataset.briefTimestamp || ""} · no ruling`
+      : archived && card.dataset.rulingSequence
+        ? `${card.dataset.briefTimestamp || ""} · ruling ${card.dataset.rulingSequence}`
+        : card.dataset.briefTimestamp || "";
     readingMeta.hidden = false;
     expandLink.href = briefPath(card.dataset.briefName || "");
     expandLink.setAttribute("aria-disabled", "false");
@@ -845,12 +957,12 @@
     }
   }
 
-  function clearDraft(issue) {
+  function clearDraft(issue, completion = "The operation completed") {
     try {
       localStorage.removeItem(draftKey(issue));
       return "";
     } catch (error) {
-      return ` The ruling was filed, but its local draft could not be cleared: ${error.message}`;
+      return ` ${completion}, but its local draft could not be cleared: ${error.message}`;
     }
   }
 
@@ -873,9 +985,12 @@
     state.awaitingFirstCapture = false;
     state.card = card;
     state.submitting = card.dataset.rulingSubmissionPending === "true";
+    state.dismissing = card.dataset.dismissalSubmissionPending === "true";
+    state.dismissArmed = false;
     state.filed =
       card.dataset.briefStatus === "archived" ||
-      Boolean(card.dataset.rulingSubmissionUncertain);
+      Boolean(card.dataset.rulingSubmissionUncertain) ||
+      Boolean(card.dataset.dismissalSubmissionUncertain);
     for (const candidate of allCards()) {
       candidate.setAttribute("aria-current", String(candidate === card));
     }
@@ -976,64 +1091,119 @@
       ? capture.parts.filter((part) => part.answered).length
       : 0;
     const archived = card.dataset.briefStatus === "archived";
-    const pending =
+    const dismissed = archived && card.dataset.archiveKind === "dismissal";
+    const rulingPending =
       state.submitting || card.dataset.rulingSubmissionPending === "true";
-    const uncertain = card.dataset.rulingSubmissionUncertain || "";
-    const rejected = card.dataset.rulingSubmissionError || "";
+    const dismissalPending =
+      state.dismissing || card.dataset.dismissalSubmissionPending === "true";
+    const pending = rulingPending || dismissalPending;
+    const rulingUncertain = card.dataset.rulingSubmissionUncertain || "";
+    const dismissalUncertain = card.dataset.dismissalSubmissionUncertain || "";
+    const uncertain = rulingUncertain || dismissalUncertain;
+    const rulingRejected = card.dataset.rulingSubmissionError || "";
+    const dismissalRejected = card.dataset.dismissalSubmissionError || "";
     const complete = Boolean(capture?.allAnswered) && state.frameDocumentVouched;
+    const publishedAtMs = Number(card.dataset.briefPublishedAtMs);
 
     navTitle.textContent = card.dataset.briefTitle || "Untitled decision";
     meterFill.style.width = `${total ? (count / total) * 100 : 0}%`;
     meterLabel.textContent = `${count} of ${total} decided`;
     ribbonProgress.textContent = `${count} of ${total} decided`;
-    ribbonBody.hidden = !capture;
+    ribbonBody.hidden = false;
     renderPartNavigation();
     updateCardProgress(count, total);
 
     sendButton.hidden = archived;
     ribbonSendButton.hidden = archived;
-    const canSend = complete && !pending && !uncertain && !archived;
+    dismissButton.hidden = archived;
+    ribbonDismissButton.hidden = archived;
+    const canSend =
+      complete && !pending && !uncertain && !archived && !state.dismissArmed;
+    const canDismiss =
+      !pending &&
+      !uncertain &&
+      !archived &&
+      Number.isSafeInteger(publishedAtMs) &&
+      publishedAtMs >= 0;
     sendButton.disabled = !canSend;
     ribbonSendButton.disabled = !canSend;
+    dismissButton.disabled = !canDismiss;
+    ribbonDismissButton.disabled = !canDismiss;
     sendButton.classList.toggle("is-filed", archived);
     ribbonSendButton.classList.toggle("is-filed", archived);
+    dismissButton.classList.toggle("is-confirming", state.dismissArmed);
+    ribbonDismissButton.classList.toggle("is-confirming", state.dismissArmed);
     ribbon.removeAttribute("aria-busy");
 
     if (archived) {
-      sendButton.textContent = "RULING FILED";
-      ribbonSendButton.textContent = "FILED";
-      draftNote.textContent = "one ruling per brief · no archived re-filing";
-      showMessage(
-        state.notice ||
-          `Ruling ${card.dataset.rulingSequence || "filed"} already acknowledges this brief.`,
-        state.noticeKind || "acknowledged",
-      );
+      state.dismissArmed = false;
+      if (dismissed) {
+        draftNote.textContent = "dismissed without ruling · republish to reopen";
+        showMessage(
+          state.notice ||
+            "This brief was dismissed without filing a ruling or waking an agent.",
+          state.noticeKind || "acknowledged",
+        );
+      } else {
+        draftNote.textContent = "one ruling per brief · no archived re-filing";
+        showMessage(
+          state.notice ||
+            `Ruling ${card.dataset.rulingSequence || "filed"} already acknowledges this brief.`,
+          state.noticeKind || "acknowledged",
+        );
+      }
       return;
     }
     if (uncertain) {
+      const noun = dismissalUncertain ? "Dismissal" : "Ruling";
       sendButton.textContent = "STATUS UNCERTAIN";
-      sendButton.title = "Reload and check the Archive before resubmitting";
+      sendButton.title = "Reload and check the Archive before trying again";
       ribbonSendButton.textContent = "UNCERTAIN";
       ribbonSendButton.title = sendButton.title;
+      dismissButton.textContent = "STATUS UNCERTAIN";
+      dismissButton.title = sendButton.title;
+      ribbonDismissButton.textContent = "UNCERTAIN";
+      ribbonDismissButton.title = sendButton.title;
       draftNote.textContent = "reload · check archive before any resubmission";
       showMessage(
-        `Ruling submission status is UNCERTAIN: ${uncertain}. Reload and check the Archive before resubmitting.`,
+        `${noun} status is UNCERTAIN: ${uncertain}. Reload and check the Archive before trying again.`,
         "error",
       );
       return;
     }
     if (pending) {
-      sendButton.textContent = "FILING…";
-      sendButton.title = "Ruling submission is in progress";
-      ribbonSendButton.textContent = "FILING…";
+      const dismissing = dismissalPending;
+      sendButton.textContent = dismissing ? "DISMISSING…" : "FILING…";
+      sendButton.title = dismissing
+        ? "Dismissal is in progress"
+        : "Ruling submission is in progress";
+      ribbonSendButton.textContent = dismissing ? "DISMISSING…" : "FILING…";
       ribbonSendButton.title = sendButton.title;
+      dismissButton.textContent = dismissing ? "DISMISSING…" : "BUSY";
+      dismissButton.title = sendButton.title;
+      ribbonDismissButton.textContent = dismissing ? "DISMISSING…" : "BUSY";
+      ribbonDismissButton.title = sendButton.title;
       ribbon.setAttribute("aria-busy", "true");
-      showMessage("Filing one ruling for this brief…");
+      showMessage(
+        dismissing
+          ? "Dismissing this brief without filing a ruling…"
+          : "Filing one ruling for this brief…",
+      );
       return;
     }
 
     sendButton.textContent = "SEND RULING";
     ribbonSendButton.textContent = "SEND RULING";
+    dismissButton.textContent = state.dismissArmed
+      ? "CONFIRM DISMISS"
+      : "DISMISS BRIEF";
+    ribbonDismissButton.textContent = state.dismissArmed
+      ? "CONFIRM"
+      : "DISMISS";
+    dismissButton.title = state.dismissArmed
+      ? "Confirm archive without filing a ruling"
+      : "Archive this brief without filing a ruling";
+    ribbonDismissButton.title = dismissButton.title;
     const incomplete = total - count;
     sendButton.title = !state.frameDocumentVouched
       ? "Waiting for the chrome-loaded brief document"
@@ -1046,8 +1216,15 @@
     draftNote.textContent = state.storageWarning
       ? "draft storage failed · this ruling is not persisted"
       : "draft persists on this device · decide every part to send";
-    if (rejected) {
-      showMessage(`Ruling was not filed: ${rejected}`, "error");
+    if (dismissalRejected) {
+      showMessage(`Brief was not dismissed: ${dismissalRejected}`, "error");
+    } else if (rulingRejected) {
+      showMessage(`Ruling was not filed: ${rulingRejected}`, "error");
+    } else if (state.dismissArmed) {
+      showMessage(
+        "Press CONFIRM DISMISS to archive this brief without a ruling. No agent will be woken.",
+        "error",
+      );
     } else if (state.storageWarning) {
       showMessage(state.storageWarning, "error");
     } else if (state.notice) {
@@ -1173,10 +1350,19 @@
   function archiveCurrentCard(card, acknowledgement, keepSelected) {
     if (!card) throw new Error("cannot archive a missing submitted card");
     const wasAwaiting = card.dataset.briefStatus === "awaiting";
-    const sequence = String(acknowledgement.sequence || "filed");
+    const archiveKind =
+      acknowledgement.kind === "dismissal" ? "dismissal" : "ruling";
+    const sequence =
+      archiveKind === "ruling" ? String(acknowledgement.sequence || "filed") : "";
+    const archivedAt = new Date(
+      archiveKind === "dismissal"
+        ? acknowledgement.dismissed_at
+        : acknowledgement.submitted_at || Date.now(),
+    );
     card.dataset.briefStatus = "archived";
+    card.dataset.archiveKind = archiveKind;
     card.dataset.rulingSequence = sequence;
-    card.dataset.briefTimestamp = `ruled ${formatUtcMoment(new Date())}`;
+    card.dataset.briefTimestamp = `${archiveKind === "dismissal" ? "dismissed" : "ruled"} ${formatUtcMoment(archivedAt)}`;
 
     const item = card.closest("[data-brief-item]");
     const archive = shell.querySelector('[data-brief-list="archive"]');
@@ -1194,6 +1380,98 @@
       setToolbar(card);
     }
     updateNavigation();
+  }
+
+  async function dismissCurrentBrief() {
+    const dismissedCard = state.card;
+    if (
+      !dismissedCard ||
+      dismissedCard.dataset.briefStatus === "archived" ||
+      state.submitting ||
+      state.dismissing ||
+      dismissedCard.dataset.rulingSubmissionUncertain ||
+      dismissedCard.dataset.dismissalSubmissionUncertain
+    ) {
+      return;
+    }
+    if (!state.dismissArmed) {
+      armDismissConfirmation();
+      return;
+    }
+    cancelDismissConfirmation();
+
+    const page = dismissedCard.dataset.briefName || "";
+    const issue = dismissedCard.dataset.briefIssue || "";
+    const publishedAtMs = Number(dismissedCard.dataset.briefPublishedAtMs);
+    if (!page || !issue || !Number.isSafeInteger(publishedAtMs) || publishedAtMs < 0) {
+      dismissedCard.dataset.dismissalSubmissionError =
+        "the inbox card has no valid publication identity";
+      renderCompanion();
+      return;
+    }
+
+    delete dismissedCard.dataset.dismissalSubmissionError;
+    delete dismissedCard.dataset.dismissalSubmissionUncertain;
+    dismissedCard.dataset.dismissalSubmissionPending = "true";
+    state.dismissing = true;
+    renderCompanion();
+
+    let acknowledgement;
+    try {
+      const response = await trackedFetch(() =>
+        fetch("/dismissals", {
+          method: "POST",
+          headers: {"Content-Type": "application/json", Accept: "application/json"},
+          credentials: "same-origin",
+          body: JSON.stringify({page, published_at_ms: publishedAtMs}),
+        }),
+      );
+      acknowledgement = await readDismissalAcknowledgement(
+        response,
+        page,
+        issue,
+        publishedAtMs,
+      );
+    } catch (error) {
+      delete dismissedCard.dataset.dismissalSubmissionPending;
+      const stillSelected = state.card === dismissedCard;
+      const detail = error instanceof Error ? error.message : String(error);
+      if (submissionFailureKind(error) === "definitely-not-filed") {
+        dismissedCard.dataset.dismissalSubmissionError = detail;
+        if (stillSelected) {
+          state.dismissing = false;
+          state.filed = false;
+          renderCompanion();
+        }
+      } else {
+        dismissedCard.dataset.dismissalSubmissionUncertain = detail;
+        delete dismissedCard.dataset.dismissalSubmissionError;
+        if (stillSelected) {
+          state.dismissing = false;
+          state.filed = true;
+          renderCompanion();
+        }
+      }
+      console.error(error);
+      return;
+    }
+
+    delete dismissedCard.dataset.dismissalSubmissionPending;
+    delete dismissedCard.dataset.dismissalSubmissionError;
+    delete dismissedCard.dataset.dismissalSubmissionUncertain;
+    const stillSelected = state.card === dismissedCard;
+    const clearWarning = clearDraft(issue, "The brief was dismissed");
+    archiveCurrentCard(dismissedCard, acknowledgement, stillSelected);
+    if (stillSelected) {
+      state.filed = true;
+      state.dismissing = false;
+      state.notice =
+        `Brief dismissed without filing a ruling or waking an agent.${clearWarning}`;
+      state.noticeKind = "acknowledged";
+      renderCompanion();
+    } else if (clearWarning) {
+      console.error(clearWarning.trim());
+    }
   }
 
   async function fileRuling() {
@@ -1286,7 +1564,7 @@
     delete submittedCard.dataset.rulingSubmissionError;
     delete submittedCard.dataset.rulingSubmissionUncertain;
     const stillSelected = state.card === submittedCard;
-    const clearWarning = clearDraft(submittedIssue);
+    const clearWarning = clearDraft(submittedIssue, "The ruling was filed");
     captureByCard.set(submittedCard, submittedCapture);
     archiveCurrentCard(submittedCard, acknowledgement, stillSelected);
     if (stillSelected) {
@@ -1507,7 +1785,9 @@
     archivePanel.hidden = expanded;
   });
   phoneInboxButton.addEventListener("click", showPhoneInbox);
+  dismissButton.addEventListener("click", () => void dismissCurrentBrief());
   sendButton.addEventListener("click", () => void fileRuling());
+  ribbonDismissButton.addEventListener("click", () => void dismissCurrentBrief());
   ribbonSendButton.addEventListener("click", () => void fileRuling());
   frame.addEventListener("load", handleFrameLoad);
   document.addEventListener("visibilitychange", () => {
