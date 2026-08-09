@@ -110,7 +110,32 @@ class UiStructureTests(unittest.TestCase):
         self.assertNotIn("/axes/", rendered)
         self.assertIn("A &lt;thorny&gt; &amp; important choice", rendered)
         self.assertNotIn("A <thorny>", rendered)
-        self.assertIn("ruling 7", rendered)
+        self.assertIn('data-ruling-sequence="7"', rendered)
+        self.assertIn(
+            'data-brief-timestamp="ruled 1970-01-01 00:01 UTC"', rendered
+        )
+        self.assertIn("data-reading-meta-issue", rendered)
+        self.assertIn("data-reading-meta-title", rendered)
+        self.assertIn("data-reading-meta-detail", rendered)
+        self.assertIn("card.dataset.briefTimestamp", rendered)
+        self.assertNotIn("brief-ruling-suffix", rendered)
+        self.assertNotIn('class="brief-time"', rendered)
+        self.assertIn('aria-label="Share"', rendered)
+        self.assertIn('aria-label="Full page"', rendered)
+        self.assertNotIn("share-button-label", rendered)
+        self.assertNotIn("full-page-label", rendered)
+        self.assertIn('aria-label="Reload inbox"', rendered)
+        self.assertIn('data-archive-disclosure', rendered)
+        self.assertIn('aria-expanded="false"', rendered)
+        self.assertNotIn("activateTab", rendered)
+        self.assertIn('window.addEventListener("pageshow"', rendered)
+        self.assertIn('document.addEventListener("visibilitychange"', rendered)
+        self.assertIn('shell.classList.contains("is-phone-reading")', rendered)
+        self.assertIn("inFlightFetches > 0", rendered)
+        self.assertLess(
+            rendered.index('data-list-panel="awaiting"'),
+            rendered.index('data-list-panel="archive"'),
+        )
         self.assertIn("color-scheme: dark;", rendered)
         self.assertIn('rel="manifest" href="/manifest.webmanifest"', rendered)
         self.assertIn("viewport-fit=cover", rendered)
@@ -142,6 +167,11 @@ class UiStructureTests(unittest.TestCase):
         self.assertIn(".app-frame.is-phone-reading .ruling-ribbon", css)
         self.assertIn(".ribbon-part-dot.is-active", css)
         self.assertIn(".ribbon-part-dot.is-answered", css)
+        self.assertIn(".issue-chip", css)
+        self.assertIn("text-overflow: ellipsis", css)
+        self.assertIn(".reading-controls button[data-share-state=", css)
+        self.assertIn(".reading-controls button {\n    width: 44px", css)
+        self.assertIn(".reading-controls a {\n    display: none", css)
         for hook in (
             "data-phone-inbox",
             "data-phone-reading-context",
@@ -327,6 +357,18 @@ class InboxClientJavaScriptTests(unittest.TestCase):
             timeout=5,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_client_utc_moment_matches_server_timestamp_shape(self) -> None:
+        self.run_node(
+            r"""
+const assert = require("node:assert/strict");
+const {formatUtcMoment} = require("./ui/inbox.js");
+assert.equal(
+  formatUtcMoment(new Date("2026-08-09T17:04:59.999Z")),
+  "2026-08-09 17:04 UTC",
+);
+"""
+        )
 
     def test_locked_shell_accepts_only_same_origin_inbox_tickets(self) -> None:
         self.run_node(

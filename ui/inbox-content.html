@@ -4,23 +4,25 @@
       <div class="wordmark">ARACHNE</div>
       <div class="brand-tag">DECISION LOOM</div>
     </header>
-    <div class="list-tabs" role="tablist" aria-label="Brief sections">
-      <button class="list-tab is-active" type="button" role="tab"
-        aria-selected="true" aria-controls="awaiting-briefs"
-        data-list-tab="awaiting">AWAITING · <span
-          data-list-count="awaiting">@@ARACHNE_PENDING_COUNT@@</span></button>
-      <button class="list-tab" type="button" role="tab"
-        aria-selected="false" aria-controls="archived-briefs"
-        data-list-tab="archive">ARCHIVE · <span
-          data-list-count="archive">@@ARACHNE_ARCHIVED_COUNT@@</span></button>
+    <div class="list-awaiting-header">
+      <span>AWAITING · <span
+        data-list-count="awaiting">@@ARACHNE_PENDING_COUNT@@</span></span>
+      <button class="list-reload" type="button" aria-label="Reload inbox"
+        title="Reload inbox" data-reload-inbox>↻</button>
     </div>
     <div class="brief-lists">
       <section class="brief-section" id="awaiting-briefs"
-        role="tabpanel" data-list-panel="awaiting">
+        data-list-panel="awaiting">
         <h2 class="visually-hidden">Awaiting ruling</h2>
         <ul class="brief-list" data-brief-list="awaiting">@@ARACHNE_PENDING_ITEMS@@</ul>
       </section>
-      <section class="brief-section" id="archived-briefs" role="tabpanel"
+      <button class="archive-disclosure" type="button" aria-expanded="false"
+        aria-controls="archived-briefs" data-archive-disclosure>
+        <span>ARCHIVE · <span
+          data-list-count="archive">@@ARACHNE_ARCHIVED_COUNT@@</span></span>
+        <span class="archive-chevron" aria-hidden="true">⌄</span>
+      </button>
+      <section class="brief-section" id="archived-briefs"
         data-list-panel="archive" hidden>
         <h2 class="visually-hidden">Archived rulings</h2>
         <ul class="brief-list" data-brief-list="archive">@@ARACHNE_ARCHIVED_ITEMS@@</ul>
@@ -47,13 +49,12 @@
           aria-label="Previous awaiting brief" data-brief-previous>‹</button>
         <button type="button" title="Next awaiting brief"
           aria-label="Next awaiting brief" data-brief-next>›</button>
-        <button type="button" title="Create and copy a 30-day public link"
-          aria-label="Create and copy a 30-day public link" data-share-brief
-          disabled><span aria-hidden="true">↗</span><span
-            class="share-button-label">SHARE</span></button>
-        <a title="Open full page" aria-label="Open selected brief as a full page"
+        <button type="button" title="Share" aria-label="Share"
+          data-share-state="share" data-share-brief disabled>
+          <span aria-hidden="true">↗</span></button>
+        <a title="Full page" aria-label="Full page"
           target="_blank" rel="noopener" data-brief-expand aria-disabled="true">
-          <span aria-hidden="true">⤢</span><span class="full-page-label">FULL PAGE</span>
+          <span aria-hidden="true">⤢</span>
         </a>
       </nav>
     </header>
@@ -78,6 +79,11 @@
       </div>
     </section>
     <div class="reading-stage">
+      <header class="reading-meta" data-reading-meta hidden>
+        <span class="reading-meta-issue" data-reading-meta-issue></span>
+        <span class="reading-meta-title" data-reading-meta-title></span>
+        <span class="reading-meta-detail" data-reading-meta-detail></span>
+      </header>
       <iframe class="brief-frame" title="Selected decision brief"
         sandbox="allow-scripts" data-reading-frame hidden></iframe>
       <div class="reading-empty" data-reading-empty>
