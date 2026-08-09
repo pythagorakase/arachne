@@ -383,7 +383,7 @@
       const note = section.querySelector("[data-complete-note]");
       if (index === sections.length - 1) {
         next.hidden = true;
-        note.hidden = !answered(section);
+        note.hidden = count !== sections.length;
       } else {
         next.hidden = false;
         next.disabled = !answered(section);
@@ -416,6 +416,9 @@
 
   function syncFromInputs() {
     showItem(Number(cursor.value || 0), {scroll: false});
+    // The brief agent reports the active part only on scroll/resize; after a
+    // silent restore, nudge it so the chrome outline tracks the visible item.
+    window.dispatchEvent(new Event("resize"));
   }
 
   window.addEventListener("message", (event) => {
