@@ -111,6 +111,8 @@ class UiStructureTests(unittest.TestCase):
         self.assertIn("A &lt;thorny&gt; &amp; important choice", rendered)
         self.assertNotIn("A <thorny>", rendered)
         self.assertIn('data-ruling-sequence="7"', rendered)
+        self.assertIn('data-archive-kind="ruling"', rendered)
+        self.assertIn('data-brief-published-at-ms="0"', rendered)
         self.assertIn(
             'data-brief-timestamp="ruled 1970-01-01 00:01 UTC"', rendered
         )
@@ -146,12 +148,40 @@ class UiStructureTests(unittest.TestCase):
         )
         self.assertIn("arachne:draft:v3:", rendered)
         self.assertIn('fetch("/ruling"', rendered)
+        self.assertIn('fetch("/dismissals"', rendered)
+        self.assertIn("data-dismiss-brief", rendered)
+        self.assertIn("data-ribbon-dismiss", rendered)
+        self.assertIn("CONFIRM DISMISS", rendered)
         self.assertIn("data-share-brief", rendered)
         self.assertIn("data-share-result", rendered)
         self.assertIn('fetch("/shares"', rendered)
         self.assertIn("REVOKE NOW", rendered)
         self.assertNotIn("confirm(", rendered)
         self.assertNotIn("@@ARACHNE_", rendered)
+
+    def test_dismissed_brief_is_distinct_from_a_filed_ruling(self) -> None:
+        dismissed = [
+            {
+                "name": "decision_stale.html",
+                "issue": "stale",
+                "title": "Stale brief",
+                "published_at": 10.0,
+                "published_at_ms": 10_000,
+                "dismissed_at": 20.0,
+                "archived_at": 20.0,
+                "archive_kind": "dismissal",
+            }
+        ]
+        rendered = render_inbox([], dismissed).decode("utf-8")
+
+        self.assertIn('data-list-count="archive">1</span>', rendered)
+        self.assertIn('data-archive-kind="dismissal"', rendered)
+        self.assertIn('data-ruling-sequence=""', rendered)
+        self.assertIn('data-brief-published-at-ms="10000"', rendered)
+        self.assertIn(
+            'data-brief-timestamp="dismissed 1970-01-01 00:00 UTC"', rendered
+        )
+        self.assertIn("Nothing has been archived yet.", render_inbox([], []).decode())
 
     def test_phone_and_tablet_shells_share_the_compact_ruling_ribbon(self) -> None:
         css = (UI / "inbox.css").read_text(encoding="utf-8")
@@ -861,6 +891,88 @@ assert.equal(isValidBriefRulingMessage({...ruling, form: []}), false);
 assert.equal(isValidBriefRulingMessage({...ruling, source: "arachne-chrome"}), false);
 assert.equal(rulingMatchesPendingToken(ruling, "fresh-send-7"), true);
 assert.equal(rulingMatchesPendingToken(ruling, "another-send"), false);
+"""
+        )
+
+    def test_dismissal_acknowledgement_is_exact_and_publication_scoped(self) -> None:
+        self.run_node(
+            r"""
+const assert = require("node:assert/strict");
+const {
+  hasOtherAwaitingBriefForIssue,
+  isValidDismissalResponse,
+  readDismissalAcknowledgement,
+} = require("./ui/inbox.js");
+
+const current = {
+  dataset: {briefIssue: "shared", briefStatus: "awaiting"},
+};
+const otherAwaiting = {
+  dataset: {briefIssue: "shared", briefStatus: "awaiting"},
+};
+const otherArchived = {
+  dataset: {briefIssue: "shared", briefStatus: "archived"},
+};
+assert.equal(
+  hasOtherAwaitingBriefForIssue([current, otherAwaiting], current, "shared"),
+  true,
+);
+assert.equal(
+  hasOtherAwaitingBriefForIssue([current, otherArchived], current, "shared"),
+  false,
+);
+assert.equal(
+  hasOtherAwaitingBriefForIssue(
+    [current, {dataset: {briefIssue: "different", briefStatus: "awaiting"}}],
+    current,
+    "shared",
+  ),
+  false,
+);
+
+const record = {
+  ok: true,
+  kind: "dismissal",
+  page: "decision_stale.html",
+  issue: "stale",
+  published_at_ms: 1234,
+  dismissed_at: "2026-08-09T20:00:00.000Z",
+  reused: false,
+};
+assert.equal(isValidDismissalResponse(record), true);
+assert.equal(isValidDismissalResponse({...record, extra: true}), false);
+assert.equal(isValidDismissalResponse({...record, kind: "ruling"}), false);
+assert.equal(isValidDismissalResponse({...record, published_at_ms: true}), false);
+assert.equal(isValidDismissalResponse({...record, dismissed_at: "never"}), false);
+
+(async () => {
+  const response = {
+    ok: true,
+    status: 201,
+    async json() { return record; },
+  };
+  assert.deepEqual(
+    await readDismissalAcknowledgement(
+      response,
+      "decision_stale.html",
+      "stale",
+      1234,
+    ),
+    record,
+  );
+  await assert.rejects(
+    () => readDismissalAcknowledgement(
+      response,
+      "decision_new.html",
+      "stale",
+      1234,
+    ),
+    /does not match/,
+  );
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 """
         )
 

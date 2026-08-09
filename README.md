@@ -69,10 +69,11 @@ bin/bootstrap-url.py --open decision_476_relationship_drift.html   # deep link
 ```
 
 **The inbox.** The root path `/` is a stable, bookmarkable mailbox: briefs
-awaiting a ruling on top, an archive of ruled ones below. Archive membership is
-*derived* — a ruling filed for a page's issue at or after its publication
-archives it, and re-publishing the issue reopens it — so submitting a ruling is
-itself the archive action and no destructive inbox endpoint exists. A visit
+awaiting a ruling on top, and an archive below. Archive membership is *derived*
+from either a ruling filed after publication or an explicit dismissal bound to
+that exact page publication. **Dismiss brief** requires a second confirmation;
+it records no ruling, advances no cursor, and wakes no agent. Re-publishing the
+brief reopens either kind of archive entry. No page is deleted or moved. A visit
 with a lapsed session gets a friendly locked shell that names nothing; ask the
 agent for a fresh bootstrap link and the bookmark unlocks itself. Add it to a
 phone home screen once and the agent never needs to hand over per-decision
@@ -242,6 +243,13 @@ existing NEXUS decision pages: `{"ok": true, "filed": "<markdown file>"}`.
 The same response also includes the durable entry's sequence, timestamps,
 payload, and artifact metadata for newer clients.
 
+Authenticated browser sessions may `POST /dismissals` with
+`{"page": "decision_x.html", "published_at_ms": 123}`. The server rejects a
+stale publication token, persists an idempotent owner-only dismissal record,
+and moves that exact page version to the archive without creating a ruling.
+This endpoint is for obsolete or superseded briefs, never a substitute for a
+human decision.
+
 Before arming against an unfamiliar cursor, an authenticated agent can inspect
 the queued backlog without changing it:
 
@@ -251,8 +259,9 @@ the queued backlog without changing it:
 
 These endpoints are read-only. They do not maintain or advance a server-side
 cursor, and a later `GET /wait?since=N` still returns the first ruling after
-that same cursor. Arachne deliberately exposes no HTTP deletion or reset
-operation; state cleanup remains an explicit deployment-administration task.
+that same cursor. Dismissals likewise never enter this stream. Arachne exposes
+no HTTP page deletion or ruling reset operation; republishing is the explicit
+way to reopen an archived page version.
 
 `examples/phone-smoke.html` is a deliberately synthetic page for the final
 phone-to-wake deployment check; it never files a real design ruling.

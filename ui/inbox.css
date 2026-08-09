@@ -849,6 +849,34 @@ textarea:focus-visible,
   color: var(--coral);
 }
 
+.dismiss-brief {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid hsl(15 75% 60% / .35);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--coral);
+  cursor: pointer;
+  font: 400 9.5px/1.2 "Cinzel", serif;
+  letter-spacing: .12em;
+}
+
+.dismiss-brief:hover:not(:disabled) {
+  border-color: var(--coral);
+  background: hsl(15 75% 60% / .08);
+}
+
+.dismiss-brief:disabled {
+  opacity: .42;
+  cursor: not-allowed;
+}
+
+.dismiss-brief.is-confirming {
+  border-color: var(--coral);
+  background: hsl(15 75% 60% / .16);
+  color: var(--parchment-bright);
+}
+
 .draft-note {
   margin: 0;
   color: var(--parchment-dim);
@@ -1081,6 +1109,31 @@ textarea:focus-visible,
   border-color: hsl(15 75% 60% / .35);
   background: hsl(15 75% 60% / .08);
   color: var(--coral);
+}
+
+.ribbon-dismiss {
+  min-width: 78px;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid hsl(15 75% 60% / .35);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--coral);
+  cursor: pointer;
+  font: 400 9px/1.2 "Cinzel", serif;
+  letter-spacing: .09em;
+}
+
+.ribbon-dismiss:hover:not(:disabled),
+.ribbon-dismiss.is-confirming {
+  border-color: var(--coral);
+  background: hsl(15 75% 60% / .14);
+  color: var(--parchment-bright);
+}
+
+.ribbon-dismiss:disabled {
+  opacity: .42;
+  cursor: not-allowed;
 }
 
 /* Tablet uses inbox + reading panes and the compact ruling ribbon. */

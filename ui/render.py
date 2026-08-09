@@ -150,13 +150,22 @@ def _format_moment(epoch: float) -> str:
 
 def _render_brief(entry: Mapping[str, Any], *, ruled: bool) -> str:
     if ruled:
-        timestamp = f"ruled {_format_moment(entry['ruled_at'])}"
         status = "archived"
-        ruling_sequence = str(entry["ruling_sequence"])
+        archive_kind = str(entry.get("archive_kind", "ruling"))
+        if archive_kind == "dismissal":
+            timestamp = f"dismissed {_format_moment(entry['dismissed_at'])}"
+            ruling_sequence = ""
+        else:
+            timestamp = f"ruled {_format_moment(entry['ruled_at'])}"
+            ruling_sequence = str(entry["ruling_sequence"])
     else:
         timestamp = f"published {_format_moment(entry['published_at'])}"
         status = "awaiting"
+        archive_kind = ""
         ruling_sequence = ""
+    published_at_ms = int(
+        entry.get("published_at_ms", int(entry["published_at"] * 1000))
+    )
     return _fill_template(
         "brief.html",
         _BRIEF_TEMPLATE,
@@ -169,6 +178,10 @@ def _render_brief(entry: Mapping[str, Any], *, ruled: bool) -> str:
                 entry["title"], quote=True
             ),
             "@@ARACHNE_BRIEF_STATUS@@": status,
+            "@@ARACHNE_BRIEF_ARCHIVE_KIND@@": html.escape(
+                archive_kind, quote=True
+            ),
+            "@@ARACHNE_BRIEF_PUBLISHED_AT_MS@@": str(published_at_ms),
             "@@ARACHNE_BRIEF_RULING_SEQUENCE@@": html.escape(
                 ruling_sequence, quote=True
             ),
@@ -212,7 +225,7 @@ def render_inbox(
     ) or _render_empty("The loom is quiet — no briefs await your ruling.")
     archived_items = "\n".join(
         _render_brief(entry, ruled=True) for entry in archived
-    ) or _render_empty("Nothing has been ruled yet.")
+    ) or _render_empty("Nothing has been archived yet.")
     main = _fill_template(
         "inbox-content.html",
         _INBOX_CONTENT_TEMPLATE,

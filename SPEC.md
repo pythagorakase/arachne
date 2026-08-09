@@ -99,19 +99,24 @@ keep, but not mandated.)
 - **Serve pages.** Given a published decision page, serve it by name over the
   tailnet URL so a browser renders it. Only allowlisted page files; nothing else.
 - **Inbox at the root.** The stable root path is an authenticated mailbox:
-  briefs awaiting a ruling, and an archive **derived** from filed rulings — a
-  ruling carrying a page's issue token, filed at or after that page's
-  publication, archives it; re-publishing the issue reopens it. The pairing
-  token is **recorded at publication** (the publish operation accepts the
-  issue the page will file); filename inference is only a fallback for pages
-  published without one, since a valid page name carries no reliable issue.
-  Filing the ruling *is* the archive action: no deletion, move, or other
-  mutating inbox operation may exist. The unauthenticated root must stay
-  human-friendly for a lapsed bookmark while revealing nothing — no page
-  names, counts, or rulings.
+  briefs awaiting a ruling, and an archive **derived** from filed rulings plus
+  explicit exact-publication dismissals. A ruling carrying a page's issue
+  token, filed at or after publication, archives it. A dismissal archives only
+  the page version whose publication token it names, creates no ruling, and
+  never wakes a waiter. Re-publishing reopens either kind. The pairing token is
+  **recorded at publication** (the publish operation accepts the issue the
+  page will file); filename inference is only a fallback for pages published
+  without one, since a valid page name carries no reliable issue. Neither path
+  deletes or moves a page. The unauthenticated root must stay human-friendly
+  for a lapsed bookmark while revealing nothing — no page names, counts, or
+  rulings.
 - **Accept a ruling.** Accept a submission carrying at least: an **issue id**, a
   **human-readable record** (markdown), and the **raw form state** (structured).
   Persist it durably as retrievable artifacts.
+- **Dismiss without ruling.** Let an authenticated human archive a stale or
+  superseded brief through a second-confirmation control. Persist the event
+  owner-only and idempotently against the exact publication; do not allocate a
+  ruling sequence, write a ruling artifact, or signal the wake condition.
 - **Wake channel.** Provide a way for the agent to *arm* a waiter such that, when
   a new ruling is filed, the waiter returns that ruling's data and the agent's
   session resumes (§4). Must be race-free via a monotonic cursor or equivalent.
@@ -278,10 +283,14 @@ service.)*
 12. **Sliding session** — a valid session past its half-life is transparently
     re-issued for the full window on use; a fresh session is not; bearer
     requests never mint cookies.
-13. **Inbox bootstrap** — a bootstrap link minted without a page lands the
+13. **No-ruling dismissal** — dismiss an exact page publication and confirm it
+    enters the archive while the ruling count/cursor remain unchanged and an
+    armed waiter is not released; repeat the request idempotently, restart the
+    service, then republish and confirm the brief reopens.
+14. **Inbox bootstrap** — a bootstrap link minted without a page lands the
     device on the inbox; an inbox-bound ticket cannot unlock a page-bound
     session or vice versa; the ticket stays single-use.
-14. **Semantic sharing** — one authenticated action produces exact public HTML
+15. **Semantic sharing** — one authenticated action produces exact public HTML
     and Markdown capability paths with the same prose, option explanations,
     tables, and LLM visual equivalents; neither artifact contains script,
     forms, drafts, or authenticated URLs. Both disappear at 30 days and
