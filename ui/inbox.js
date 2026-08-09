@@ -419,6 +419,7 @@
   let inFlightFetches = 0;
   let foregroundAgeStartedAt = Date.now();
   let reloadRequested = false;
+  let staleReloadPending = false;
 
   function allCards() {
     return Array.from(shell.querySelectorAll("[data-brief-name]"));
@@ -472,7 +473,17 @@
       return await operation();
     } finally {
       inFlightFetches -= 1;
+      if (inFlightFetches === 0 && staleReloadPending) maybeReloadStaleInbox();
     }
+  }
+
+  function phoneReadingActive() {
+    // selectBrief() sets is-phone-reading on every layout; the compact reading
+    // mode only exists under the phone media query.
+    return (
+      shell.classList.contains("is-phone-reading") &&
+      window.matchMedia("(max-width: 760px)").matches
+    );
   }
 
   function maybeReloadStaleInbox() {
@@ -480,11 +491,16 @@
       reloadRequested ||
       document.visibilityState !== "visible" ||
       Date.now() - foregroundAgeStartedAt < FOREGROUND_RELOAD_AGE_MS ||
-      shell.classList.contains("is-phone-reading") ||
-      inFlightFetches > 0
+      phoneReadingActive()
     ) {
+      staleReloadPending = false;
       return;
     }
+    if (inFlightFetches > 0) {
+      staleReloadPending = true;
+      return;
+    }
+    staleReloadPending = false;
     reloadRequested = true;
     window.location.reload();
   }
