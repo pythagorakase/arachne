@@ -5,7 +5,7 @@ set -eu
 # exports the MCP bearer token at login. MCP endpoint registration remains an
 # explicit Codex configuration step because it is deployment-specific.
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 skill_source="$repo_root/plugin/skills/arachne"
 skill_root=${CODEX_SKILLS_ROOT:-"$HOME/.agents/skills"}
 skill_link="$skill_root/arachne"
