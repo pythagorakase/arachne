@@ -544,6 +544,59 @@ assert.equal(computeKeyboardInset(844, Number.NaN, 0), 0);
 """
         )
 
+    def test_keyboard_inset_listeners_drive_the_shell_custom_property(self) -> None:
+        # Drives the installed visualViewport wiring for real: the module is
+        # loaded against stub globals, the captured resize listener fires, and
+        # the rAF-coalesced update must write the computed inset to the shell.
+        self.run_node(
+            r"""
+const assert = require("node:assert/strict");
+
+const rafQueue = [];
+const setProperties = [];
+const viewportListeners = {};
+const shell = {
+  style: {setProperty: (name, value) => setProperties.push([name, value])},
+  classList: {contains: () => false},
+  querySelector: () => null,
+};
+globalThis.document = {
+  querySelector: (selector) =>
+    selector === "[data-arachne-shell]" ? shell : null,
+  addEventListener: () => {},
+  visibilityState: "visible",
+};
+globalThis.window = {
+  visualViewport: {
+    height: 510,
+    offsetTop: 20,
+    addEventListener: (type, handler) => {
+      viewportListeners[type] = handler;
+    },
+  },
+  innerHeight: 844,
+  requestAnimationFrame: (callback) => rafQueue.push(callback),
+  addEventListener: () => {},
+  matchMedia: () => ({matches: false}),
+};
+
+// Module load stops at the first missing chrome element, after the viewport
+// wiring installed; that partial boot is exactly what this test exercises.
+assert.throws(() => require("./ui/inbox.js"));
+
+assert.equal(typeof viewportListeners.resize, "function");
+assert.equal(typeof viewportListeners.scroll, "function");
+while (rafQueue.length) rafQueue.shift()();
+assert.deepEqual(setProperties.pop(), ["--keyboard-inset", "314px"]);
+
+globalThis.window.visualViewport.height = 844;
+globalThis.window.visualViewport.offsetTop = 0;
+viewportListeners.resize();
+while (rafQueue.length) rafQueue.shift()();
+assert.deepEqual(setProperties.pop(), ["--keyboard-inset", "0px"]);
+"""
+        )
+
     def test_brief_agent_serializes_single_and_multi_value_controls(self) -> None:
         self.run_node(
             r"""
