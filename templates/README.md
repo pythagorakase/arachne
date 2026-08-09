@@ -48,3 +48,48 @@ The HTML contains compact metadata-free JPEG previews and opaque candidate IDs, 
 neither source filenames nor filesystem paths. Keep the generated
 `*.provenance.json` private: it is the mapping needed to interpret the ruling.
 The Arachne server and ruling protocol require no image-specific changes.
+
+## Blind image rating
+
+`bin/build-image-rating.py` consumes one JSON manifest containing two or more
+images to rate independently. The builder shuffles the set once, assigns only
+positional labels after shuffling, and shows one image at a time with a fixed
+thumbnail rail. Source IDs and paths appear only in the private provenance
+sidecar. Byte-identical images are allowed so a set can include deliberate
+positive and negative controls.
+
+```json
+{
+  "schema_version": 1,
+  "issue": "project-character-identity-rating-v1",
+  "title": "Character identity rating",
+  "subject": "Character",
+  "question": "Does this face look like Character?",
+  "instructions": "Judge facial geometry and recognition, not polish.",
+  "item_noun": "Face",
+  "items": [
+    {"id": "positive-control", "path": "./control.png"},
+    {"id": "candidate-iteration", "path": "./candidate.png"}
+  ],
+  "options": [
+    {"value": "yes", "label": "Yes", "hint": "Clearly recognizable."},
+    {"value": "kind_of", "label": "Kind of", "hint": "Recognizable but drifted."},
+    {"value": "no", "label": "No", "hint": "Not recognizable."}
+  ]
+}
+```
+
+`instructions`, `item_noun`, and `options` are optional. The defaults are a
+short rating instruction, `Item`, and Yes / Kind of / No. Item and option IDs
+must be safe identifiers; all object schemas reject unknown keys.
+
+Build and publish:
+
+```bash
+bin/build-image-rating.py manifest.json decision_character_rating.html
+bin/publish-page.py decision_character_rating.html --pages-dir pages
+```
+
+The generated page embeds compact metadata-free previews and exposes only
+opaque item IDs. Keep its `*.provenance.json` private; it records the shuffled
+position-to-source mapping needed to interpret the rating.
