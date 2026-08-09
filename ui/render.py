@@ -153,15 +153,10 @@ def _render_brief(entry: Mapping[str, Any], *, ruled: bool) -> str:
         timestamp = f"ruled {_format_moment(entry['ruled_at'])}"
         status = "archived"
         ruling_sequence = str(entry["ruling_sequence"])
-        ruling_suffix = (
-            '<span class="brief-ruling-suffix">ruling '
-            f"{html.escape(ruling_sequence)}</span>"
-        )
     else:
         timestamp = f"published {_format_moment(entry['published_at'])}"
         status = "awaiting"
         ruling_sequence = ""
-        ruling_suffix = ""
     return _fill_template(
         "brief.html",
         _BRIEF_TEMPLATE,
@@ -179,8 +174,7 @@ def _render_brief(entry: Mapping[str, Any], *, ruled: bool) -> str:
             ),
             "@@ARACHNE_BRIEF_ISSUE@@": html.escape(entry["issue"]),
             "@@ARACHNE_BRIEF_TITLE@@": html.escape(entry["title"]),
-            "@@ARACHNE_BRIEF_TIMESTAMP@@": html.escape(timestamp),
-            "@@ARACHNE_BRIEF_RULING_SUFFIX@@": ruling_suffix,
+            "@@ARACHNE_BRIEF_TIMESTAMP@@": html.escape(timestamp, quote=True),
         },
     ).strip()
 

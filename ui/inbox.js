@@ -10,6 +10,7 @@
   const LIST_MAX = 440;
   const NAV_MIN = 260;
   const NAV_MAX = 420;
+  const FOREGROUND_RELOAD_AGE_MS = 60000;
 
   class DefinitelyNotFiledError extends Error {
     constructor(message, status) {
@@ -299,9 +300,14 @@
       : "ambiguous";
   }
 
+  function formatUtcMoment(date) {
+    return `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+  }
+
   if (typeof module !== "undefined" && module.exports) {
     module.exports = Object.freeze({
       draftMatchesForm,
+      formatUtcMoment,
       formShapeFingerprint,
       isValidBriefCaptureMessage,
       isValidBriefInViewMessage,
@@ -354,8 +360,14 @@
   const previousButton = required("[data-brief-previous]");
   const nextButton = required("[data-brief-next]");
   const shareButton = required("[data-share-brief]");
-  const shareButtonLabel = required(".share-button-label");
   const expandLink = required("[data-brief-expand]");
+  const reloadButton = required("[data-reload-inbox]");
+  const archiveDisclosure = required("[data-archive-disclosure]");
+  const archivePanel = required('[data-list-panel="archive"]');
+  const readingMeta = required("[data-reading-meta]");
+  const readingMetaIssue = required("[data-reading-meta-issue]");
+  const readingMetaTitle = required("[data-reading-meta-title]");
+  const readingMetaDetail = required("[data-reading-meta-detail]");
   const shareResult = required("[data-share-result]");
   const shareStatus = required("[data-share-status]");
   const shareExpiry = required("[data-share-expiry]");
@@ -404,6 +416,10 @@
     revokingShare: false,
   };
   let collectTokenSequence = 0;
+  let inFlightFetches = 0;
+  let foregroundAgeStartedAt = Date.now();
+  let reloadRequested = false;
+  let staleReloadPending = false;
 
   function allCards() {
     return Array.from(shell.querySelectorAll("[data-brief-name]"));
@@ -433,14 +449,60 @@
   }
 
   function setShareButtonState(label, disabled) {
-    shareButtonLabel.textContent = label;
-    shareButton.disabled = disabled;
-    shareButton.setAttribute(
-      "aria-label",
+    const accessibleLabel =
       label === "SHARE"
-        ? "Create and copy a 30-day public link"
-        : label.toLowerCase().replace("…", ""),
+        ? "Share"
+        : label === "SHARING…"
+          ? "Sharing…"
+          : "Revoking…";
+    const shareState =
+      label === "SHARE"
+        ? "share"
+        : label === "SHARING…"
+          ? "sharing"
+          : "revoking";
+    shareButton.disabled = disabled;
+    shareButton.setAttribute("aria-label", accessibleLabel);
+    shareButton.title = accessibleLabel;
+    shareButton.dataset.shareState = shareState;
+  }
+
+  async function trackedFetch(operation) {
+    inFlightFetches += 1;
+    try {
+      return await operation();
+    } finally {
+      inFlightFetches -= 1;
+      if (inFlightFetches === 0 && staleReloadPending) maybeReloadStaleInbox();
+    }
+  }
+
+  function phoneReadingActive() {
+    // selectBrief() sets is-phone-reading on every layout; the compact reading
+    // mode only exists under the phone media query.
+    return (
+      shell.classList.contains("is-phone-reading") &&
+      window.matchMedia("(max-width: 760px)").matches
     );
+  }
+
+  function maybeReloadStaleInbox() {
+    if (
+      reloadRequested ||
+      document.visibilityState !== "visible" ||
+      Date.now() - foregroundAgeStartedAt < FOREGROUND_RELOAD_AGE_MS ||
+      phoneReadingActive()
+    ) {
+      staleReloadPending = false;
+      return;
+    }
+    if (inFlightFetches > 0) {
+      staleReloadPending = true;
+      return;
+    }
+    staleReloadPending = false;
+    reloadRequested = true;
+    window.location.reload();
   }
 
   function hideShareResult() {
@@ -560,6 +622,12 @@
     phoneReadingContext.textContent = `#${issue} · ${title}`;
     readingStatus.textContent = archived ? "ARCHIVED" : "AWAITING";
     readingStatus.hidden = false;
+    readingMetaIssue.textContent = `#${issue}`;
+    readingMetaTitle.textContent = title;
+    readingMetaDetail.textContent = archived && card.dataset.rulingSequence
+      ? `${card.dataset.briefTimestamp || ""} · ruling ${card.dataset.rulingSequence}`
+      : card.dataset.briefTimestamp || "";
+    readingMeta.hidden = false;
     expandLink.href = briefPath(card.dataset.briefName || "");
     expandLink.setAttribute("aria-disabled", "false");
     setShareButtonState("SHARE", state.sharing || state.revokingShare);
@@ -692,17 +760,6 @@
     if (state.card) activePartByCard.set(state.card, partId);
     renderPartNavigation();
     if (scrollBrief) scrollBriefToPart(partId);
-  }
-
-  function activateTab(name) {
-    for (const tab of shell.querySelectorAll("[data-list-tab]")) {
-      const active = tab.dataset.listTab === name;
-      tab.classList.toggle("is-active", active);
-      tab.setAttribute("aria-selected", String(active));
-    }
-    for (const panel of shell.querySelectorAll("[data-list-panel]")) {
-      panel.hidden = panel.dataset.listPanel !== name;
-    }
   }
 
   function readDraft(issue) {
@@ -1073,12 +1130,7 @@
     const sequence = String(acknowledgement.sequence || "filed");
     card.dataset.briefStatus = "archived";
     card.dataset.rulingSequence = sequence;
-    let suffix = card.querySelector(".brief-ruling-suffix");
-    if (!suffix) {
-      suffix = make("span", "brief-ruling-suffix");
-      card.querySelector(".brief-title-row")?.append(suffix);
-    }
-    suffix.textContent = `ruling ${sequence}`;
+    card.dataset.briefTimestamp = `ruled ${formatUtcMoment(new Date())}`;
 
     const item = card.closest("[data-brief-item]");
     const archive = shell.querySelector('[data-brief-list="archive"]');
@@ -1093,7 +1145,6 @@
       );
     }
     if (keepSelected) {
-      activateTab("archive");
       setToolbar(card);
     }
     updateNavigation();
@@ -1152,12 +1203,14 @@
         form: ruling.form,
         markdown: ruling.markdown,
       };
-      const response = await fetch("/ruling", {
-        method: "POST",
-        headers: {"Content-Type": "application/json", Accept: "application/json"},
-        credentials: "same-origin",
-        body: JSON.stringify(payload),
-      });
+      const response = await trackedFetch(() =>
+        fetch("/ruling", {
+          method: "POST",
+          headers: {"Content-Type": "application/json", Accept: "application/json"},
+          credentials: "same-origin",
+          body: JSON.stringify(payload),
+        }),
+      );
       acknowledgement = await readRulingAcknowledgement(response, submittedIssue);
     } catch (error) {
       delete submittedCard.dataset.rulingSubmissionPending;
@@ -1210,12 +1263,14 @@
     setShareButtonState("SHARING…", true);
     hideShareResult();
     try {
-      const response = await fetch("/shares", {
-        method: "POST",
-        headers: {"Content-Type": "application/json", Accept: "application/json"},
-        credentials: "same-origin",
-        body: JSON.stringify({page: sharedCard.dataset.briefName || ""}),
-      });
+      const response = await trackedFetch(() =>
+        fetch("/shares", {
+          method: "POST",
+          headers: {"Content-Type": "application/json", Accept: "application/json"},
+          credentials: "same-origin",
+          body: JSON.stringify({page: sharedCard.dataset.briefName || ""}),
+        }),
+      );
       const record = await readShareResponse(response);
       shareByCard.set(sharedCard, record);
       if (state.card === sharedCard) {
@@ -1244,14 +1299,16 @@
     setShareButtonState("REVOKING…", true);
     shareRevokeButton.disabled = true;
     try {
-      const response = await fetch(
-        `/shares/${encodeURIComponent(record.id)}/revoke`,
-        {
-          method: "POST",
-          headers: {"Content-Type": "application/json", Accept: "application/json"},
-          credentials: "same-origin",
-          body: "{}",
-        },
+      const response = await trackedFetch(() =>
+        fetch(
+          `/shares/${encodeURIComponent(record.id)}/revoke`,
+          {
+            method: "POST",
+            headers: {"Content-Type": "application/json", Accept: "application/json"},
+            credentials: "same-origin",
+            body: "{}",
+          },
+        ),
       );
       if (response.status !== 204) {
         let detail = "";
@@ -1362,9 +1419,6 @@
     });
   }
 
-  for (const tab of shell.querySelectorAll("[data-list-tab]")) {
-    tab.addEventListener("click", () => activateTab(tab.dataset.listTab));
-  }
   for (const card of allCards()) {
     card.addEventListener("click", () => {
       showPhoneBrief();
@@ -1400,10 +1454,24 @@
   });
   shareRevokeButton.addEventListener("click", () => void revokeCurrentShare());
   shareCloseButton.addEventListener("click", hideShareResult);
+  reloadButton.addEventListener("click", () => window.location.reload());
+  archiveDisclosure.addEventListener("click", () => {
+    const expanded = archiveDisclosure.getAttribute("aria-expanded") === "true";
+    archiveDisclosure.setAttribute("aria-expanded", String(!expanded));
+    archivePanel.hidden = expanded;
+  });
   phoneInboxButton.addEventListener("click", showPhoneInbox);
   sendButton.addEventListener("click", () => void fileRuling());
   ribbonSendButton.addEventListener("click", () => void fileRuling());
   frame.addEventListener("load", handleFrameLoad);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      foregroundAgeStartedAt = Date.now();
+      return;
+    }
+    maybeReloadStaleInbox();
+  });
+  window.addEventListener("pageshow", maybeReloadStaleInbox);
   window.addEventListener("message", (event) => {
     // contentWindow is a persistent WindowProxy across iframe navigations.
     if (event.source !== frame.contentWindow) return;

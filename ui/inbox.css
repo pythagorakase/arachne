@@ -161,40 +161,57 @@ textarea:focus-visible,
   letter-spacing: .42em;
 }
 
-.list-tabs {
+.list-awaiting-header,
+.archive-disclosure {
   display: flex;
+  width: 100%;
   flex: none;
-  gap: 4px;
-  padding: 12px 18px 0;
-  overflow-x: auto;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
   border-bottom: 1px solid var(--purple-low);
-  scrollbar-width: none;
-}
-
-.list-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.list-tab {
-  flex: none;
-  padding: 8px 10px 9px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--parchment-dim);
-  cursor: pointer;
+  color: var(--parchment-strong);
   font: 400 11px/1 "Cinzel", serif;
   letter-spacing: .12em;
-  white-space: nowrap;
 }
 
-.list-tab:hover {
-  color: var(--parchment);
+.list-reload {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--purple-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--parchment-muted);
+  cursor: pointer;
+  font: 18px/1 "Cinzel", serif;
+  place-items: center;
 }
 
-.list-tab.is-active {
-  border-bottom-color: var(--accent);
+.list-reload:hover,
+.archive-disclosure:hover {
+  border-color: var(--accent);
   color: var(--parchment-strong);
+}
+
+.archive-disclosure {
+  border: 0;
+  border-top: 1px solid var(--purple-low);
+  border-bottom: 1px solid var(--purple-low);
+  background: var(--pane-raised);
+  color: var(--parchment-dim);
+  cursor: pointer;
+  text-align: left;
+}
+
+.archive-chevron {
+  font-size: 16px;
+  transition: transform 140ms ease-out;
+}
+
+.archive-disclosure[aria-expanded="true"] .archive-chevron {
+  transform: rotate(180deg);
 }
 
 .brief-lists,
@@ -255,26 +272,29 @@ textarea:focus-visible,
   opacity: .82;
 }
 
-.brief-meta-row,
+.brief-issue-row,
 .brief-title-row,
 .brief-progress {
   display: flex;
   align-items: center;
 }
 
-.brief-meta-row {
-  gap: 7px;
+.brief-issue-row {
   min-width: 0;
 }
 
 .issue-chip {
-  flex: none;
+  min-width: 0;
+  max-width: 100%;
   padding: 2px 8px;
+  overflow: hidden;
   border: 1px solid var(--purple-border);
   border-radius: 3px;
   background: hsl(270 40% 20% / .55);
   color: var(--accent-soft);
   font: 400 10.5px/1.35 "Cinzel", serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .repo-pill {
@@ -292,14 +312,6 @@ textarea:focus-visible,
   white-space: nowrap;
 }
 
-.brief-time {
-  flex: none;
-  margin-left: auto;
-  color: var(--parchment-dim);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-
 .brief-title-row {
   align-items: baseline;
   gap: 8px;
@@ -313,14 +325,6 @@ textarea:focus-visible,
   font-weight: 600;
   line-height: 1.3;
   overflow-wrap: anywhere;
-}
-
-.brief-ruling-suffix {
-  flex: none;
-  margin-left: auto;
-  color: var(--parchment-dim);
-  font-size: 11.5px;
-  white-space: nowrap;
 }
 
 .brief-progress {
@@ -446,9 +450,10 @@ textarea:focus-visible,
 .reading-controls button,
 .reading-controls a {
   display: grid;
+  width: 30px;
   min-width: 30px;
   height: 30px;
-  padding: 0 9px;
+  padding: 0;
   border: 1px solid var(--purple-border);
   border-radius: 5px;
   place-items: center;
@@ -457,11 +462,6 @@ textarea:focus-visible,
   cursor: pointer;
   font-family: "Cinzel", serif;
   text-decoration: none;
-}
-
-.reading-controls a {
-  display: flex;
-  gap: 7px;
 }
 
 .reading-controls button:hover:not(:disabled),
@@ -477,17 +477,21 @@ textarea:focus-visible,
   pointer-events: none;
 }
 
-.full-page-label {
-  font-size: 9.5px;
-  letter-spacing: .08em;
-  white-space: nowrap;
+.reading-controls button[data-share-state="sharing"],
+.reading-controls button[data-share-state="revoking"] {
+  opacity: .62;
 }
 
-.share-button-label {
-  margin-left: 6px;
-  font-size: 9.5px;
-  letter-spacing: .08em;
-  white-space: nowrap;
+.reading-controls button[data-share-state="sharing"] > span,
+.reading-controls button[data-share-state="revoking"] > span {
+  animation: share-busy-pulse 800ms ease-in-out infinite alternate;
+}
+
+@keyframes share-busy-pulse {
+  to {
+    opacity: .38;
+    transform: translateY(-1px);
+  }
 }
 
 .share-result {
@@ -602,23 +606,61 @@ textarea:focus-visible,
 
 .reading-stage {
   position: relative;
+  display: flex;
   min-height: 0;
   flex: 1;
+  flex-direction: column;
   overflow: hidden;
   background: #0d0d0d;
+}
+
+.reading-meta {
+  display: flex;
+  min-width: 0;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px 9px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--purple-low);
+  background: var(--pane);
+  color: var(--parchment-dim);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.reading-meta-issue {
+  padding: 1px 6px;
+  border: 1px solid var(--purple-border);
+  border-radius: 3px;
+  background: hsl(270 40% 20% / .55);
+  color: var(--accent-soft);
+  font: 400 10px/1.35 "Cinzel", serif;
+  letter-spacing: .05em;
+}
+
+.reading-meta-title {
+  color: var(--parchment-strong);
+  font-weight: 600;
+}
+
+.reading-meta-detail {
+  color: var(--parchment-dim);
 }
 
 .brief-frame {
   display: block;
   width: 100%;
-  height: 100%;
+  min-height: 0;
+  flex: 1;
   border: 0;
   background: #0d0d0d;
 }
 
 .reading-empty {
   display: grid;
-  height: 100%;
+  min-height: 0;
+  flex: 1;
   padding: 36px;
   place-content: center;
   color: var(--parchment-dim);
@@ -1105,33 +1147,6 @@ textarea:focus-visible,
   }
 }
 
-@media (min-width: 761px) and (max-width: 1099px) {
-  .brief-meta-row {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 5px;
-  }
-
-  .brief-time {
-    margin-left: 0;
-    font-size: 10.5px;
-    white-space: normal;
-  }
-
-  .reading-controls a {
-    width: 30px;
-    padding: 0;
-  }
-
-  .full-page-label {
-    display: none;
-  }
-
-  .share-button-label {
-    display: none;
-  }
-}
-
 @media (max-width: 760px) {
   html,
   body {
@@ -1187,15 +1202,15 @@ textarea:focus-visible,
     letter-spacing: .4em;
   }
 
-  .list-tabs {
-    padding: 0 20px;
+  .list-awaiting-header,
+  .archive-disclosure {
+    min-height: 44px;
+    padding: 7px 20px;
   }
 
-  .list-tab {
-    min-height: 44px;
-    padding: 10px 12px;
-    font-size: 11px;
-    letter-spacing: .12em;
+  .list-reload {
+    width: 44px;
+    height: 44px;
   }
 
   .brief-section {
@@ -1292,10 +1307,6 @@ textarea:focus-visible,
     display: none;
   }
 
-  .share-button-label {
-    display: none;
-  }
-
   .share-result {
     top: calc(58px + env(safe-area-inset-top));
     right: calc(10px + env(safe-area-inset-right));
@@ -1316,5 +1327,14 @@ textarea:focus-visible,
     max-height: min(48vh, 360px);
     max-height: min(48dvh, 360px);
     padding-left: calc(12px + env(safe-area-inset-left));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .archive-chevron,
+  .reading-controls button[data-share-state="sharing"] > span,
+  .reading-controls button[data-share-state="revoking"] > span {
+    animation: none;
+    transition: none;
   }
 }
