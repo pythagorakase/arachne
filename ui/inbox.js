@@ -132,6 +132,24 @@
     );
   }
 
+  function computeKeyboardInset(
+    layoutViewportHeight,
+    visualViewportHeight,
+    visualViewportOffsetTop = 0,
+  ) {
+    const layoutHeight = Number(layoutViewportHeight);
+    const visualHeight = Number(visualViewportHeight);
+    const offsetTop = Number(visualViewportOffsetTop);
+    if (
+      !Number.isFinite(layoutHeight) ||
+      !Number.isFinite(visualHeight) ||
+      !Number.isFinite(offsetTop)
+    ) {
+      return 0;
+    }
+    return Math.max(0, layoutHeight - visualHeight - offsetTop);
+  }
+
   function formShapeFingerprint(form) {
     if (!isPlainObject(form)) {
       throw new TypeError("draft form must be a plain object");
@@ -301,6 +319,7 @@
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = Object.freeze({
+      computeKeyboardInset,
       draftMatchesForm,
       formShapeFingerprint,
       isValidBriefCaptureMessage,
@@ -323,6 +342,33 @@
       ? null
       : document.querySelector("[data-arachne-shell]");
   if (!shell) return;
+
+  if (window.visualViewport) {
+    const visualViewport = window.visualViewport;
+    let keyboardInsetFramePending = false;
+
+    function updateKeyboardInset() {
+      keyboardInsetFramePending = false;
+      const inset = computeKeyboardInset(
+        window.innerHeight,
+        visualViewport.height,
+        visualViewport.offsetTop,
+      );
+      shell.style.setProperty("--keyboard-inset", `${inset}px`);
+    }
+
+    function scheduleKeyboardInsetUpdate() {
+      if (keyboardInsetFramePending) return;
+      keyboardInsetFramePending = true;
+      window.requestAnimationFrame(updateKeyboardInset);
+    }
+
+    visualViewport.addEventListener("resize", scheduleKeyboardInsetUpdate);
+    visualViewport.addEventListener("scroll", scheduleKeyboardInsetUpdate, {
+      passive: true,
+    });
+    scheduleKeyboardInsetUpdate();
+  }
 
   function required(selector) {
     const node = shell.querySelector(selector);
