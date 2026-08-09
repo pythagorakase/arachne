@@ -165,6 +165,15 @@ class UiStructureTests(unittest.TestCase):
         self.assertIn("env(safe-area-inset-top)", css)
         self.assertIn("env(safe-area-inset-bottom)", css)
         self.assertIn(".app-frame.is-phone-reading .ruling-ribbon", css)
+        phone_css = css[css.index("@media (max-width: 760px)") :]
+        phone_reading_rule = phone_css[
+            phone_css.index(".app-frame.is-phone-reading .reading-pane") :
+        ]
+        phone_reading_rule = phone_reading_rule[: phone_reading_rule.index("}")]
+        self.assertIn(
+            "height: calc(100dvh - var(--keyboard-inset, 0px));",
+            phone_reading_rule,
+        )
         self.assertIn(".ribbon-part-dot.is-active", css)
         self.assertIn(".ribbon-part-dot.is-answered", css)
         self.assertIn(".issue-chip", css)
@@ -196,6 +205,8 @@ class UiStructureTests(unittest.TestCase):
         self.assertIn('type: "collect", token', client)
         self.assertIn("state.expectingChromeLoad = true", client)
         self.assertIn("invalidateForeignFrameDocument", client)
+        self.assertIn("window.visualViewport", client)
+        self.assertIn('shell.style.setProperty("--keyboard-inset"', client)
         self.assertNotIn("@@ARACHNE_", rendered)
 
     def test_home_screen_manifest_and_icon_allowlist_are_complete(self) -> None:
@@ -561,6 +572,73 @@ for (const candidate of [
 """
         )
 
+    def test_keyboard_inset_tracks_only_occluded_viewport_height(self) -> None:
+        self.run_node(
+            r"""
+const assert = require("node:assert/strict");
+const {computeKeyboardInset} = require("./ui/inbox.js");
+
+assert.equal(computeKeyboardInset(844, 844, 0), 0);
+assert.equal(computeKeyboardInset(844, 510, 0), 334);
+assert.equal(computeKeyboardInset(844, 510, 20), 314);
+assert.equal(computeKeyboardInset(600, 700, 0), 0);
+assert.equal(computeKeyboardInset(844, Number.NaN, 0), 0);
+"""
+        )
+
+    def test_keyboard_inset_listeners_drive_the_shell_custom_property(self) -> None:
+        # Drives the installed visualViewport wiring for real: the module is
+        # loaded against stub globals, the captured resize listener fires, and
+        # the rAF-coalesced update must write the computed inset to the shell.
+        self.run_node(
+            r"""
+const assert = require("node:assert/strict");
+
+const rafQueue = [];
+const setProperties = [];
+const viewportListeners = {};
+const shell = {
+  style: {setProperty: (name, value) => setProperties.push([name, value])},
+  classList: {contains: () => false},
+  querySelector: () => null,
+};
+globalThis.document = {
+  querySelector: (selector) =>
+    selector === "[data-arachne-shell]" ? shell : null,
+  addEventListener: () => {},
+  visibilityState: "visible",
+};
+globalThis.window = {
+  visualViewport: {
+    height: 510,
+    offsetTop: 20,
+    addEventListener: (type, handler) => {
+      viewportListeners[type] = handler;
+    },
+  },
+  innerHeight: 844,
+  requestAnimationFrame: (callback) => rafQueue.push(callback),
+  addEventListener: () => {},
+  matchMedia: () => ({matches: false}),
+};
+
+// Module load stops at the first missing chrome element, after the viewport
+// wiring installed; that partial boot is exactly what this test exercises.
+assert.throws(() => require("./ui/inbox.js"));
+
+assert.equal(typeof viewportListeners.resize, "function");
+assert.equal(typeof viewportListeners.scroll, "function");
+while (rafQueue.length) rafQueue.shift()();
+assert.deepEqual(setProperties.pop(), ["--keyboard-inset", "314px"]);
+
+globalThis.window.visualViewport.height = 844;
+globalThis.window.visualViewport.offsetTop = 0;
+viewportListeners.resize();
+while (rafQueue.length) rafQueue.shift()();
+assert.deepEqual(setProperties.pop(), ["--keyboard-inset", "0px"]);
+"""
+        )
+
     def test_brief_agent_serializes_single_and_multi_value_controls(self) -> None:
         self.run_node(
             r"""
@@ -590,6 +668,46 @@ assert.deepEqual(serializeForm(controls), {
   rationale: "Ship the narrow path.",
   reviewers: ["design", "security"],
 });
+"""
+        )
+
+    def test_brief_agent_keeps_only_text_entry_focus_visible(self) -> None:
+        self.run_node(
+            r"""
+const assert = require("node:assert/strict");
+const {isTextEntryControl} = require("./ui/brief-agent.js");
+
+for (const control of [
+  {tagName: "TEXTAREA"},
+  {tagName: "INPUT", type: "text"},
+  {tagName: "INPUT", type: "email"},
+  {tagName: "INPUT", type: "number"},
+  {tagName: "INPUT", type: "password"},
+  {tagName: "INPUT", type: "search"},
+  {tagName: "INPUT", type: "tel"},
+  {tagName: "INPUT", type: "url"},
+]) {
+  assert.equal(isTextEntryControl(control), true, JSON.stringify(control));
+}
+for (const control of [
+  {tagName: "SELECT"},
+  {tagName: "BUTTON"},
+  {tagName: "INPUT", type: "checkbox"},
+  {tagName: "INPUT", type: "radio"},
+  {tagName: "INPUT", type: "range"},
+  {tagName: "INPUT", type: "submit"},
+]) {
+  assert.equal(isTextEntryControl(control), false, JSON.stringify(control));
+}
+
+const source = require("node:fs").readFileSync(
+  "./ui/brief-agent.js",
+  "utf8",
+);
+assert.match(source, /document\.addEventListener\("focusin"/);
+assert.match(source, /document\.addEventListener\("focusout"/);
+assert.match(source, /window\.addEventListener\("resize", handleFocusedControlResize\)/);
+assert.match(source, /scrollIntoView\(\{block: "center", behavior: "smooth"\}\)/);
 """
         )
 

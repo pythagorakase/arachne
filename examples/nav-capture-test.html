@@ -115,6 +115,16 @@
   const BRIEF_SOURCE = "arachne-brief";
   const CHROME_SOURCE = "arachne-chrome";
   const CONTROL_SELECTOR = "input[name], select[name], textarea[name]";
+  const TEXT_INPUT_TYPES = new Set([
+    "",
+    "email",
+    "number",
+    "password",
+    "search",
+    "tel",
+    "text",
+    "url",
+  ]);
 
   function isPlainObject(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -138,6 +148,12 @@
 
   function normalizedType(control) {
     return String(control?.type || "").toLowerCase();
+  }
+
+  function isTextEntryControl(control) {
+    const tag = normalizedTag(control);
+    if (tag === "textarea") return true;
+    return tag === "input" && TEXT_INPUT_TYPES.has(normalizedType(control));
   }
 
   function namedControls(root) {
@@ -321,6 +337,7 @@
   if (typeof module !== "undefined" && module.exports) {
     module.exports = Object.freeze({
       composeMarkdown,
+      isTextEntryControl,
       isValidParentMessage,
       makeRulingMessage,
       restoreForm,
@@ -331,6 +348,8 @@
   if (typeof window === "undefined" || typeof document === "undefined") return;
 
   let captureFramePending = false;
+  let focusedControlFramePending = false;
+  let focusedTextControl = null;
   let scrollFramePending = false;
   let lastReportedAxis = null;
 
@@ -388,6 +407,23 @@
     if (scrollFramePending) return;
     scrollFramePending = true;
     window.requestAnimationFrame(reportInView);
+  }
+
+  function keepFocusedControlVisible() {
+    focusedControlFramePending = false;
+    const control = focusedTextControl;
+    if (!control || document.activeElement !== control) return;
+    control.scrollIntoView({block: "center", behavior: "smooth"});
+  }
+
+  function scheduleFocusedControlVisibility() {
+    if (focusedControlFramePending) return;
+    focusedControlFramePending = true;
+    window.requestAnimationFrame(keepFocusedControlVisible);
+  }
+
+  function handleFocusedControlResize() {
+    if (focusedTextControl) scheduleFocusedControlVisibility();
   }
 
   function partLabel(element) {
@@ -515,6 +551,15 @@
 
   window.addEventListener("scroll", scheduleInView, {passive: true});
   window.addEventListener("resize", scheduleInView);
+  window.addEventListener("resize", handleFocusedControlResize);
+  document.addEventListener("focusin", (event) => {
+    if (!isTextEntryControl(event.target)) return;
+    focusedTextControl = event.target;
+    scheduleFocusedControlVisibility();
+  });
+  document.addEventListener("focusout", (event) => {
+    if (event.target === focusedTextControl) focusedTextControl = null;
+  });
   document.addEventListener("input", scheduleCapture);
   document.addEventListener("change", scheduleCapture);
   window.addEventListener("message", (event) => {
