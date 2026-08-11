@@ -192,6 +192,8 @@ class ArachneEndToEndTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(health["ok"])
         self.assertEqual(health["bound_host"], "127.0.0.1")
+        self.assertEqual(health["active_waiters"], 0)
+        self.assertEqual(health["wait_capacity"], 24)
 
         with urlopen(
             Request(
