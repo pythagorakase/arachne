@@ -985,16 +985,18 @@ class ArachneHandler(BaseHTTPRequestHandler):
                 entry = self.arachne.store.wait_after(
                     cursor, self.arachne.config.wait_seconds
                 )
+                # A long poll owns one worker for its lifetime. Closing after
+                # the response prevents a repeating waiter from pinning that
+                # worker's HTTP/1.1 connection indefinitely. Keep the wait
+                # slot through the write so slow clients cannot overlap a full
+                # generation of waking handlers with replacement polls.
+                self.close_connection = True
+                if entry is None:
+                    self._write(HTTPStatus.NO_CONTENT)
+                else:
+                    self._json(HTTPStatus.OK, entry)
             finally:
                 self.arachne.release_wait_slot()
-            # A long poll owns one worker for its lifetime. Closing after the
-            # response prevents a repeating waiter from pinning that worker's
-            # HTTP/1.1 connection indefinitely.
-            self.close_connection = True
-            if entry is None:
-                self._write(HTTPStatus.NO_CONTENT)
-            else:
-                self._json(HTTPStatus.OK, entry)
             return
         if path == "/rulings":
             self._require_authentication()
