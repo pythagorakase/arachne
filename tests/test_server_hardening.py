@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import shutil
@@ -11,10 +12,11 @@ import tempfile
 import threading
 import time
 import unittest
+from http import HTTPStatus
 from http.cookies import SimpleCookie
 from pathlib import Path
 from unittest.mock import patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import page_contract
@@ -466,6 +468,114 @@ class ServerProtocolHardeningTests(unittest.TestCase):
             first.close()
             bounded_server.shutdown()
             bounded_server.server_close()
+            thread.join(timeout=2)
+
+    def test_long_polls_reserve_workers_for_interactive_requests(self) -> None:
+        root = Path(self.temporary.name) / "wait-capacity-server"
+        pages = root / "pages"
+        data = root / "data"
+        pages.mkdir(parents=True)
+        config = arachne_server.Config(
+            pages_dir=pages,
+            data_dir=data,
+            token_file=data / "auth-token",
+            port=0,
+            wait_seconds=0.5,
+            secure_cookie=False,
+            tls_cert_file=None,
+            tls_key_file=None,
+        )
+        authentication = arachne_server.Authentication(config.token_file)
+        store = arachne_server.RulingStore(config.data_dir)
+        with (
+            patch.object(arachne_server, "MAX_CONNECTION_WORKERS", 3),
+            patch.object(arachne_server, "MAX_WAIT_WORKERS", 1),
+        ):
+            wait_server = arachne_server.ArachneServer(
+                config, store, authentication
+            )
+        thread = threading.Thread(target=wait_server.serve_forever, daemon=True)
+        thread.start()
+        origin = f"http://{arachne_server.LOOPBACK_HOST}:{wait_server.server_port}"
+        authorization = {
+            "Authorization": f"Bearer {config.token_file.read_text().strip()}"
+        }
+        response_write_started = threading.Event()
+        release_response_write = threading.Event()
+        original_write = arachne_server.ArachneHandler._write
+
+        def pause_first_wait_response(
+            handler: arachne_server.ArachneHandler,
+            status: HTTPStatus,
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            if status == HTTPStatus.NO_CONTENT and handler.path.startswith("/wait?"):
+                response_write_started.set()
+                if not release_response_write.wait(timeout=2):
+                    raise AssertionError("timed out waiting to release wait response")
+            original_write(handler, status, *args, **kwargs)  # type: ignore[arg-type]
+
+        def wait_once() -> int:
+            with urlopen(
+                Request(f"{origin}/wait?since=0", headers=authorization),
+                timeout=2,
+            ) as response:
+                response.read()
+                return response.status
+
+        try:
+            with (
+                patch.object(
+                    arachne_server.ArachneHandler,
+                    "_write",
+                    pause_first_wait_response,
+                ),
+                concurrent.futures.ThreadPoolExecutor() as pool,
+            ):
+                first = pool.submit(wait_once)
+                deadline = time.monotonic() + 1
+                while wait_server.active_waiters != 1:
+                    if time.monotonic() >= deadline:
+                        self.fail("the first long poll did not occupy its wait slot")
+                    time.sleep(0.01)
+
+                with self.assertRaises(HTTPError) as rejected:
+                    urlopen(
+                        Request(
+                            f"{origin}/wait?since=0", headers=authorization
+                        ),
+                        timeout=1,
+                    )
+                self.assertEqual(rejected.exception.code, 503)
+                self.assertEqual(rejected.exception.headers["Retry-After"], "1")
+                self.assertEqual(rejected.exception.headers["Connection"], "close")
+                self.assertEqual(
+                    json.load(rejected.exception)["error"], "wait_capacity"
+                )
+
+                with urlopen(f"{origin}/health", timeout=1) as response:
+                    health = json.load(response)
+                self.assertEqual(health["active_waiters"], 1)
+                self.assertEqual(health["wait_capacity"], 1)
+
+                self.assertTrue(response_write_started.wait(timeout=1))
+                self.assertEqual(wait_server.active_waiters, 1)
+                with self.assertRaises(HTTPError) as slow_write_rejected:
+                    urlopen(
+                        Request(
+                            f"{origin}/wait?since=0", headers=authorization
+                        ),
+                        timeout=1,
+                    )
+                self.assertEqual(slow_write_rejected.exception.code, 503)
+
+                release_response_write.set()
+                self.assertEqual(first.result(timeout=2), 204)
+        finally:
+            release_response_write.set()
+            wait_server.shutdown()
+            wait_server.server_close()
             thread.join(timeout=2)
 
 

@@ -11,6 +11,7 @@ import tomllib
 import unittest
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import AsyncIterator
 from urllib.request import urlopen
 
@@ -18,12 +19,13 @@ import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from mcp_server import ADAPTER_VERSION, _read_owner_token
+from mcp_server import ADAPTER_VERSION, ArachneClient, _read_owner_token
 from page_contract import read_page_issue
 from tests.test_e2e import (
     RunningArachne,
     bearer,
     free_port,
+    get_json,
     post_ruling,
 )
 
@@ -129,6 +131,124 @@ class AdapterVersionSyncTests(unittest.TestCase):
         with (REPO / "pyproject.toml").open("rb") as stream:
             manifest = tomllib.load(stream)
         self.assertEqual(ADAPTER_VERSION, manifest["project"]["version"])
+
+
+class _ProgressContext:
+    def __init__(self) -> None:
+        self.reports: list[tuple[float, str | None]] = []
+
+    async def report_progress(
+        self,
+        current: float,
+        total: float | None = None,
+        message: str | None = None,
+    ) -> None:
+        del total
+        self.reports.append((current, message))
+
+
+class _ControlledWaitClient(ArachneClient):
+    def __init__(self) -> None:
+        super().__init__(SimpleNamespace(heartbeat_seconds=0.01))  # type: ignore[arg-type]
+        self.calls: list[int] = []
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancelled = 0
+
+    async def _wait_for_ruling_upstream(self, since: int, shared: object) -> dict:
+        del shared
+        self.calls.append(since)
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+        return {
+            "cursor": since + 1,
+            "ruling": {"sequence": since + 1, "issue": "shared-wait"},
+        }
+
+
+class SharedMCPWaitTests(unittest.IsolatedAsyncioTestCase):
+    def test_only_explicit_wait_capacity_response_is_retryable(self) -> None:
+        self.assertTrue(
+            ArachneClient._is_wait_capacity(
+                httpx.Response(503, json={"error": "wait_capacity"})
+            )
+        )
+        self.assertFalse(
+            ArachneClient._is_wait_capacity(
+                httpx.Response(503, json={"error": "service_unavailable"})
+            )
+        )
+        self.assertFalse(
+            ArachneClient._is_wait_capacity(
+                httpx.Response(503, text="gateway unavailable")
+            )
+        )
+
+    async def _wait_for_subscribers(
+        self, client: _ControlledWaitClient, since: int, count: int
+    ) -> None:
+        for _ in range(100):
+            shared = client._waits.get(since)
+            if shared is not None and shared.subscribers == count:
+                return
+            await asyncio.sleep(0)
+        self.fail(f"cursor {since} never reached {count} subscribers")
+
+    async def test_same_cursor_subscribers_share_one_upstream_wait(self) -> None:
+        client = _ControlledWaitClient()
+        contexts = [_ProgressContext(), _ProgressContext()]
+        waiters = [
+            asyncio.create_task(client.wait_for_ruling(33, context))
+            for context in contexts
+        ]
+        await self._wait_for_subscribers(client, 33, 2)
+        await client.started.wait()
+        self.assertEqual(client.calls, [33])
+
+        client.release.set()
+        received = await asyncio.gather(*waiters)
+        self.assertEqual(received[0], received[1])
+        self.assertEqual(received[0]["cursor"], 34)
+        self.assertEqual(client._waits, {})
+
+    async def test_one_cancellation_does_not_cancel_another_subscriber(self) -> None:
+        client = _ControlledWaitClient()
+        first = asyncio.create_task(
+            client.wait_for_ruling(33, _ProgressContext())
+        )
+        second = asyncio.create_task(
+            client.wait_for_ruling(33, _ProgressContext())
+        )
+        await self._wait_for_subscribers(client, 33, 2)
+        await client.started.wait()
+
+        first.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await first
+        await self._wait_for_subscribers(client, 33, 1)
+        self.assertEqual(client.cancelled, 0)
+
+        client.release.set()
+        self.assertEqual((await second)["cursor"], 34)
+        self.assertEqual(client._waits, {})
+
+    async def test_last_cancellation_releases_the_shared_upstream_wait(self) -> None:
+        client = _ControlledWaitClient()
+        waiter = asyncio.create_task(
+            client.wait_for_ruling(33, _ProgressContext())
+        )
+        await self._wait_for_subscribers(client, 33, 1)
+        await client.started.wait()
+
+        waiter.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiter
+        self.assertEqual(client.cancelled, 1)
+        self.assertEqual(client._waits, {})
 
 
 class ArachneMCPTests(unittest.IsolatedAsyncioTestCase):
@@ -267,6 +387,11 @@ class ArachneMCPTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(
             asyncio.gather(*(event.wait() for event in progress_seen)), timeout=2
         )
+        _, health = await asyncio.to_thread(
+            get_json, f"{self.arachne.url}/health"
+        )
+        self.assertEqual(health["active_waiters"], 1)
+        self.assertEqual(health["wait_capacity"], 24)
         _, filed = await asyncio.to_thread(
             post_ruling, self.arachne.url, self.arachne.token, "mcp-two-consumers"
         )

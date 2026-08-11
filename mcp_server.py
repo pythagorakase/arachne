@@ -183,9 +183,18 @@ class UpstreamProblem(RuntimeError):
     """A safe, credential-free description of an Arachne upstream failure."""
 
 
+@dataclass
+class _SharedWait:
+    task: asyncio.Task[dict[str, Any]] | None = None
+    subscribers: int = 0
+    message: str = "Waiting for an Arachne ruling"
+
+
 class ArachneClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._waits: dict[int, _SharedWait] = {}
+        self._waits_lock = asyncio.Lock()
 
     def _client(self, *, wait: bool = False) -> httpx.AsyncClient:
         read_timeout = (
@@ -209,6 +218,19 @@ class ArachneClient:
         if isinstance(detail, str) and detail:
             return f"upstream returned HTTP {response.status_code}: {detail}"
         return f"upstream returned HTTP {response.status_code}"
+
+    @staticmethod
+    def _is_wait_capacity(response: httpx.Response) -> bool:
+        if response.status_code != 503:
+            return False
+        try:
+            payload = response.json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return False
+        return (
+            isinstance(payload, dict)
+            and payload.get("error") == "wait_capacity"
+        )
 
     async def _json_request(
         self,
@@ -284,47 +306,25 @@ class ArachneClient:
             "credential": "single-use bootstrap ticket",
         }
 
-    async def wait_for_ruling(
-        self, since: int, context: Context[Any, Any]
+    async def _wait_for_ruling_upstream(
+        self, since: int, shared: _SharedWait
     ) -> dict[str, Any]:
         backoff = 1.0
-        elapsed = 0.0
         async with self._client(wait=True) as client:
             while True:
-                request = asyncio.create_task(client.get(f"/wait?since={since}"))
-                while True:
-                    try:
-                        response = await asyncio.wait_for(
-                            asyncio.shield(request),
-                            timeout=self.settings.heartbeat_seconds,
-                        )
-                        break
-                    except TimeoutError:
-                        elapsed += self.settings.heartbeat_seconds
-                        await context.report_progress(
-                            elapsed,
-                            message=f"Waiting for a ruling after sequence {since}",
-                        )
-                    except asyncio.CancelledError:
-                        request.cancel()
-                        raise
-                    except httpx.RequestError:
-                        break
-
-                if not request.done():
-                    request.cancel()
-                    await asyncio.gather(request, return_exceptions=True)
-                    response = None
-                else:
-                    try:
-                        response = request.result()
-                    except httpx.RequestError:
-                        response = None
-
-                if response is None:
-                    await context.report_progress(
-                        elapsed,
-                        message=f"Arachne unavailable; retrying in {backoff:g}s",
+                shared.message = f"Waiting for a ruling after sequence {since}"
+                try:
+                    response = await client.get(f"/wait?since={since}")
+                except httpx.RequestError:
+                    shared.message = (
+                        f"Arachne unavailable; retrying in {backoff:g}s"
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 30.0)
+                    continue
+                if self._is_wait_capacity(response):
+                    shared.message = (
+                        f"Arachne wake capacity busy; retrying in {backoff:g}s"
                     )
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 30.0)
@@ -348,6 +348,52 @@ class ArachneClient:
                         "Arachne returned a ruling without a valid advancing sequence"
                     )
                 return {"cursor": sequence, "ruling": ruling}
+
+    async def wait_for_ruling(
+        self, since: int, context: Context[Any, Any]
+    ) -> dict[str, Any]:
+        """Share one upstream long poll among every subscriber at a cursor."""
+
+        async with self._waits_lock:
+            shared = self._waits.get(since)
+            if shared is None:
+                shared = _SharedWait(
+                    message=f"Waiting for a ruling after sequence {since}"
+                )
+                self._waits[since] = shared
+                shared.task = asyncio.create_task(
+                    self._wait_for_ruling_upstream(since, shared),
+                    name=f"arachne-wait-{since}",
+                )
+            shared.subscribers += 1
+            task = shared.task
+        assert task is not None
+
+        elapsed = 0.0
+        try:
+            while True:
+                try:
+                    return await asyncio.wait_for(
+                        asyncio.shield(task),
+                        timeout=self.settings.heartbeat_seconds,
+                    )
+                except TimeoutError:
+                    elapsed += self.settings.heartbeat_seconds
+                    await context.report_progress(
+                        elapsed,
+                        message=shared.message,
+                    )
+        finally:
+            task_to_cancel: asyncio.Task[dict[str, Any]] | None = None
+            async with self._waits_lock:
+                shared.subscribers -= 1
+                if shared.subscribers == 0 and self._waits.get(since) is shared:
+                    del self._waits[since]
+                    if not task.done():
+                        task.cancel()
+                        task_to_cancel = task
+            if task_to_cancel is not None:
+                await asyncio.gather(task_to_cancel, return_exceptions=True)
 
 
 class BearerAuthentication:

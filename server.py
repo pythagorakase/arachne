@@ -62,6 +62,10 @@ BOOTSTRAP_TICKET_SECONDS = 5 * 60
 INBOX_PATH = "/"
 TLS_HANDSHAKE_TIMEOUT = 5
 MAX_CONNECTION_WORKERS = 32
+# Long-polling wake clients must not consume every connection worker and make
+# the interactive inbox unreachable. Eight workers remain available for
+# health checks, browser traffic, publication, and ruling submission.
+MAX_WAIT_WORKERS = 24
 ISSUE_SLUG = re.compile(r"[^A-Za-z0-9._-]+")
 AUTH_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,256}\Z")
 BOOTSTRAP_TICKET = re.compile(r"[A-Za-z0-9_-]{32,256}\Z")
@@ -669,8 +673,29 @@ class ArachneServer(ThreadingHTTPServer):
             tls_context.load_cert_chain(config.tls_cert_file, config.tls_key_file)
         self._tls_context = tls_context
         self._connection_slots = threading.BoundedSemaphore(MAX_CONNECTION_WORKERS)
+        self.wait_capacity = MAX_WAIT_WORKERS
+        self._wait_slots = threading.BoundedSemaphore(self.wait_capacity)
+        self._wait_count_lock = threading.Lock()
+        self._active_waiters = 0
         super().__init__((LOOPBACK_HOST, config.port), ArachneHandler)
         self.tls_enabled = tls_context is not None
+
+    @property
+    def active_waiters(self) -> int:
+        with self._wait_count_lock:
+            return self._active_waiters
+
+    def try_acquire_wait_slot(self) -> bool:
+        if not self._wait_slots.acquire(blocking=False):
+            return False
+        with self._wait_count_lock:
+            self._active_waiters += 1
+        return True
+
+    def release_wait_slot(self) -> None:
+        with self._wait_count_lock:
+            self._active_waiters -= 1
+        self._wait_slots.release()
 
     def process_request(self, request: Any, client_address: Any) -> None:
         """Bound unauthenticated connection workers before creating a thread."""
@@ -862,6 +887,8 @@ class ArachneHandler(BaseHTTPRequestHandler):
             "latest_sequence": self.arachne.store.latest_sequence,
             "ruling_count": self.arachne.store.count,
             "dismissal_count": self.arachne.dismissals.count,
+            "active_waiters": self.arachne.active_waiters,
+            "wait_capacity": self.arachne.wait_capacity,
             "bound_host": LOOPBACK_HOST,
             "port": self.arachne.server_port,
             "tls": self.arachne.tls_enabled,
@@ -942,13 +969,34 @@ class ArachneHandler(BaseHTTPRequestHandler):
         if path == "/wait":
             self._require_authentication()
             cursor = self._parse_cursor(parsed.query)
-            entry = self.arachne.store.wait_after(
-                cursor, self.arachne.config.wait_seconds
-            )
-            if entry is None:
-                self._write(HTTPStatus.NO_CONTENT)
-            else:
-                self._json(HTTPStatus.OK, entry)
+            if not self.arachne.try_acquire_wait_slot():
+                self.close_connection = True
+                self._json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {
+                        "error": "wait_capacity",
+                        "detail": "Arachne wake capacity is temporarily full",
+                        "status": int(HTTPStatus.SERVICE_UNAVAILABLE),
+                    },
+                    extra_headers={"Retry-After": "1"},
+                )
+                return
+            try:
+                entry = self.arachne.store.wait_after(
+                    cursor, self.arachne.config.wait_seconds
+                )
+                # A long poll owns one worker for its lifetime. Closing after
+                # the response prevents a repeating waiter from pinning that
+                # worker's HTTP/1.1 connection indefinitely. Keep the wait
+                # slot through the write so slow clients cannot overlap a full
+                # generation of waking handlers with replacement polls.
+                self.close_connection = True
+                if entry is None:
+                    self._write(HTTPStatus.NO_CONTENT)
+                else:
+                    self._json(HTTPStatus.OK, entry)
+            finally:
+                self.arachne.release_wait_slot()
             return
         if path == "/rulings":
             self._require_authentication()

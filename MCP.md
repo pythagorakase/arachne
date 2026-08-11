@@ -21,7 +21,10 @@ observed sequence in `since`, receive the advancing sequence in `cursor`, and
 decide when to retain it. Repeating the same call is replay-safe. While the
 core long-poll is blocked, the MCP request emits progress notifications (every
 30 seconds by default) so a harness can distinguish a live wait from a wedged
-tool call.
+tool call. The core's long-poll timeout is only a renewable transport cycle:
+it does not limit the human decision window, and the MCP tool can remain pending
+for hours or days. Concurrent callers at the same cursor share one upstream
+long poll while retaining independent progress heartbeats and cancellation.
 
 Publication is a real server capability, not an `rsync` wrapper. The MCP
 adapter authenticates to the core server, which applies the same page-name,

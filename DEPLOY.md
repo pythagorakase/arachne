@@ -299,6 +299,9 @@ curl --fail https://localhost:8788/health
 An unauthenticated request made with `--cacert` to an allowlisted decision page,
 `/ruling`, `/rulings?since=0`, `/rulings/1`, or `/wait` must return `401`;
 `/health` deliberately remains a non-sensitive unauthenticated liveness signal.
+It reports `active_waiters` and `wait_capacity`; long polls beyond that capacity
+receive a retryable `503 wait_capacity`, preserving workers for health checks,
+browser traffic, publication, and ruling submission.
 Confirm `tailscale serve status` shows `https://localhost:8788`, never an HTTP
 or insecure-TLS target.
 
