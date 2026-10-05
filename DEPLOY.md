@@ -13,7 +13,7 @@ How to make Arachne's interactive application always-on and reachable from the
 owner's devices, tailnet-only. The optional public snapshot origin is a separate
 loopback process with its own narrowly scoped tunnel; it never exposes the
 inbox or application server. The durable deployment is the Ubuntu host `cairn`;
-the MacBook bridge is retained only as rollback state. The older Whatbox
+the MacBook bridge now serves as its independent warm standby. The older Whatbox
 procedure remains below as a shared-host reference, but is not part of the
 current deployment.
 
@@ -316,7 +316,11 @@ no public port; stdlib footprint (not resource-intensive); rootless; none of the
 prohibited categories (LLM/mining/P2P/Tor). Squarely within the Whatbox software
 rules and AUP.
 
-## Moving the MacBook bridge to `cairn`
+## Historical: moving the MacBook bridge to `cairn`
+
+> Completed 2026-07-19. Do not run this procedure against the warm standby: the
+> standby is an independent instance, and quiescing it or copying its state
+> into `cairn` is never part of failover or failback.
 
 The cutover has one durable application boundary: the complete
 `ARACHNE_DATA_DIR` (including `auth-token` and `rulings/`) plus every published
@@ -871,9 +875,16 @@ Never `funnel`. From another tailnet device `/health` at
 dedicated worktree) so day-to-day branch work cannot change what the standby
 runs on its next restart.
 
-While a decision is pending on the standby, keep the MacBook awake and online
-(lid open or on power, or `caffeinate`); a sleeping MacBook leaves the brief
-unreachable until it wakes, though nothing is lost.
+While a decision is pending on the standby, keep the MacBook awake and online.
+An open lid or a connected charger does **not** prevent idle sleep; hold an
+explicit assertion for the duration instead, for example:
+
+```bash
+caffeinate -i -w <agent-pid>   # or plain `caffeinate -i` in a spare terminal
+```
+
+A sleeping MacBook leaves the brief unreachable until it wakes, though nothing
+is lost.
 
 ### Failover and failback
 
