@@ -927,8 +927,12 @@ open for the whole session:
 schtasks /create /tn "Arachne WSL keepalive" /sc onlogon /ru %USERNAME% /it ^
   /rl limited /f ^
   /tr "conhost.exe --headless wsl.exe -d Ubuntu --exec /usr/bin/sleep infinity"
+powershell -NoProfile -Command "$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0; Set-ScheduledTask -TaskName 'Arachne WSL keepalive' -Settings $s"
 schtasks /run /tn "Arachne WSL keepalive"
 ```
+
+`schtasks` cannot set the execution limit, and Task Scheduler's default
+stops a task after 72 hours; the `PowerShell` line removes that limit.
 
 The standby is therefore up whenever the owner is logged in to `halcyon`,
 which matches how that machine's availability is observed.
@@ -947,6 +951,17 @@ was started from SSH or a background task.
 "C:\Program Files\Tailscale\tailscale.exe" serve --bg --https=8443 http://127.0.0.1:8879
 "C:\Program Files\Tailscale\tailscale.exe" serve status
 ```
+
+**Known gap: the backend is not authenticated to the proxy.** SPEC §2's
+verified-HTTPS backend rule exists because loopback is not a per-user
+boundary, and `halcyon` is not single-principal: besides the owner it has
+`CodexSandboxOffline`/`CodexSandboxOnline` accounts that run agent code.
+While WSL is stopped, a process under one of those accounts could bind
+8878/8879 and receive the owner token or session cookies that Serve
+forwards. Closing this needs a TLS listener on the MCP adapter (it has none
+today) plus a name-constrained private CA trusted by Windows' machine store
+so Serve can target `https://localhost:…`. Until then, treat the standby as
+an accepted, owner-acknowledged exception and keep WSL running.
 
 Never `funnel`. From another tailnet device, `/health` at
 `https://halcyon.tail342046.ts.net/` must answer, sensitive routes must return

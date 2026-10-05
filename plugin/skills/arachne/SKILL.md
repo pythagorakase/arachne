@@ -103,9 +103,13 @@ cursor file between concurrent agent sessions and never hand-edit it otherwise.
 with its **own ruling store and sequence space** — not a replica.
 
 - Use `arachne` normally. Switch to `arachne-standby` for **new** decisions
-  only when the primary's tools are missing (the server failed to connect) or
-  its calls fail with connection errors or timeouts. Claude's plugin surfaces
-  the standby as `mcp__plugin_arachne_arachne-standby__<tool>`.
+  only once the primary is shown to be **unreachable**: its calls fail with
+  connection errors or timeouts, or its tools are missing because the server
+  failed to connect *and* the standby's `status` succeeds. A failed connection
+  can also mean a rejected token or headers-helper error (step 0's stop
+  cases) — if the reported cause is authentication, or the standby fails the
+  same way, stop and tell the human instead of failing over. Claude's plugin
+  surfaces the standby as `mcp__plugin_arachne_arachne-standby__<tool>`.
 - A decision is waited on and answered on the server it was published to.
   Decisions already pending on a downed primary simply wait for it to return;
   do not republish them unless the human asks.
