@@ -99,7 +99,7 @@ cursor file between concurrent agent sessions and never hand-edit it otherwise.
 
 ## Failover
 
-`arachne` is the primary. `arachne-standby` is a separate always-on instance
+`arachne` is the primary. `arachne-standby` is a separate instance on the owner's MacBook
 with its **own ruling store and sequence space** — not a replica.
 
 - Use `arachne` normally. Switch to `arachne-standby` for **new** decisions

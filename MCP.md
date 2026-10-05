@@ -141,7 +141,7 @@ with the same token variable and the same timeout and tool settings under
 
 ```bash
 codex mcp add arachne-standby \
-  --url https://halcyon.tail342046.ts.net:8443/mcp \
+  --url https://echo.tail342046.ts.net:8443/mcp \
   --bearer-token-env-var ARACHNE_MCP_TOKEN
 ```
 

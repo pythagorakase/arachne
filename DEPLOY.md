@@ -3,11 +3,11 @@
 > **Current deployment: `cairn`** (home Ubuntu box, system `tailscaled`,
 > user-systemd supervision), cut over 2026-07-19 as a deliberate fresh-state
 > migration; the seedbox's final rulings are archived client-side. **Warm
-> standby: `halcyon`** (Windows desktop, WSL2 Ubuntu) runs an independent
-> instance that agents use for new decisions while `cairn` is unreachable —
-> see [Warm standby on `halcyon`](#warm-standby-on-halcyon-windows--wsl2). The
-> MacBook-bridge and seedbox sections below are retained as the historical
-> runbook and for teardown reference.
+> standby: the MacBook `echo`** reuses the MacBook-bridge LaunchAgents as an
+> independent instance that agents use for new decisions while `cairn` is
+> unreachable — see [Warm standby on the MacBook](#warm-standby-on-the-macbook-echo).
+> The seedbox sections below are retained as the historical runbook and for
+> teardown reference.
 
 How to make Arachne's interactive application always-on and reachable from the
 owner's devices, tailnet-only. The optional public snapshot origin is a separate
@@ -31,7 +31,7 @@ Tailscale TLS; Ubuntu should restore the verified private-CA backend.
 
 ---
 
-## Historical: MacBook bridge (retired)
+## MacBook bridge (now the warm standby)
 
 Use one owner-only `~/.config/arachne/deployment.env` for both the core and MCP
 adapter. Avoid ports already occupied by an older local decision server. For
@@ -821,12 +821,13 @@ rule targeting private ports 8788 or 8790, and that neither of those ports has
 become reachable off-tailnet. Unknown, expired, and revoked capability paths
 must remain indistinguishable.
 
-## Warm standby on `halcyon` (Windows + WSL2)
+## Warm standby on the MacBook (`echo`)
 
 `cairn` is a single headless box; when it drops off the tailnet nobody is home
-to restart it. `halcyon` is an always-on, non-headless Windows desktop whose
-outages the owner notices immediately, so it hosts a warm standby that agents
-fail over to for **new** decisions.
+to restart it. The MacBook `echo` hosts a warm standby that agents fail over to
+for **new** decisions. It is the [MacBook bridge](#macbook-bridge-now-the-warm-standby)
+above, unchanged: the same LaunchAgents, owner-only `deployment.env`, ports
+8878/8879, and same-user loopback HTTP behind Tailscale TLS.
 
 The standby is an **independent instance, not a replica**. It has its own
 `ARACHNE_DATA_DIR`, published pages, and ruling sequence space. Replication
@@ -836,138 +837,43 @@ protocol to keep the single-writer rule (never two writable origins against
 one cursor) when `cairn` returns. With independent stores there is nothing to
 fence — each decision is published, answered, and waited on at one origin,
 and clients keep one cursor per server (the client skill's **Failover**
-section). The cost is a split history: standby rulings stay in `halcyon`'s
-inbox.
+section). The cost is a split history: standby rulings stay in the MacBook's
+inbox. Both instances share the owner token, so one client credential and
+`headersHelper` serve both MCP registrations.
 
-Both instances share the owner token, so one client credential and
-`headersHelper` serve both MCP registrations. The core uses same-user
-loopback HTTP behind Tailscale TLS, as the personal MacBook bridge did; this
-is a single-owner personal machine, not a shared host.
+Why the MacBook rather than an always-on desktop: plain loopback HTTP is only
+acceptable where loopback is effectively a single-owner boundary. `echo` has
+one human account, so any process able to claim 8878/8879 already runs as the
+owner and could read the token directly. A Windows desktop hosting
+Codex-sandbox principals failed that test and would have needed a TLS listener
+on the MCP adapter plus a private CA in the machine trust store; the MacBook
+needs neither. Its availability also tracks demand — the agents that publish
+and wait run on the same machine, so the standby is up whenever one of them
+is.
 
-### 1. Install inside WSL
+### Enable
 
-In the WSL Ubuntu distribution (systemd enabled via `/etc/wsl.conf`
-`[boot] systemd=true`), as the owner user — **never `sudo` for `uv`**:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-git clone https://github.com/pythagorakase/arachne ~/arachne
-cd ~/arachne && uv sync --frozen
-install -d -m 700 ~/.local/state/arachne ~/.local/state/arachne-runtime
-```
-
-Copy the owner token over SSH stdin so it never touches the Windows
-filesystem or the terminal (Windows OpenSSH lands in `cmd.exe`):
+With both LaunchAgents loaded (`launchctl list | grep arachne`) and healthy at
+`http://127.0.0.1:8878/health`, expose them through Tailscale Serve:
 
 ```bash
-ssh halcyon 'wsl -d Ubuntu -- bash -c "umask 077; cat > ~/.local/state/arachne/auth-token"' \
-  < ~/.local/state/arachne/auth-token
+tailscale serve --bg --yes http://127.0.0.1:8878
+tailscale serve --bg --yes --https=8443 http://127.0.0.1:8879
+tailscale serve status
 ```
 
-Install this owner-only (`0600`) `~/.config/arachne/deployment.env`:
+Never `funnel`. From another tailnet device `/health` at
+`https://echo.tail342046.ts.net/` must answer, sensitive routes must return
+`401` without credentials, and the MCP endpoint
+`https://echo.tail342046.ts.net:8443/mcp` is registered by the plugin as
+`arachne-standby`. The LaunchAgents run the code in the rendered
+`@@ARACHNE_ROOT@@` checkout; keep that checkout on `main` (or point it at a
+dedicated worktree) so day-to-day branch work cannot change what the standby
+runs on its next restart.
 
-```dotenv
-ARACHNE_RUNTIME_DIR=/home/pythagor/.local/state/arachne-runtime
-ARACHNE_DATA_DIR=/home/pythagor/.local/state/arachne
-ARACHNE_PAGES_DIR=/home/pythagor/arachne/pages
-ARACHNE_TOKEN_FILE=/home/pythagor/.local/state/arachne/auth-token
-ARACHNE_PORT=8878
-ARACHNE_PYTHON=/home/pythagor/arachne/.venv/bin/python
-ARACHNE_SECURE_COOKIE=true
-ARACHNE_URL=http://127.0.0.1:8878
-ARACHNE_PUBLIC_URL=https://halcyon.tail342046.ts.net
-ARACHNE_MCP_HOST=127.0.0.1
-ARACHNE_MCP_PORT=8879
-ARACHNE_MCP_ALLOWED_HOSTS=127.0.0.1:8879,localhost:8879,halcyon.tail342046.ts.net:8443
-ARACHNE_MCP_HEARTBEAT_SECONDS=30
-ARACHNE_REQUEST_TIMEOUT=570
-ARACHNE_MCP_PYTHON=/home/pythagor/arachne/.venv/bin/python
-```
-
-Install only the core and MCP user units. The public snapshot origin is not
-part of the standby, so drop `arachne-share.service` from the installed
-core unit's `Upholds=` rather than leaving a reference to a unit that does
-not exist.
-
-```bash
-mkdir -p ~/.config/systemd/user
-install -m 0644 ~/arachne/deploy/systemd/arachne.service \
-  ~/arachne/deploy/systemd/arachne-mcp.service ~/.config/systemd/user/
-sed -i 's/ arachne-share.service//' ~/.config/systemd/user/arachne.service
-systemctl --user daemon-reload
-systemctl --user enable --now arachne.service arachne-mcp.service
-sudo loginctl enable-linger "$USER"
-curl --fail http://127.0.0.1:8878/health
-```
-
-Lingering starts the user units whenever the distribution boots, without an
-interactive WSL shell.
-
-### 2. Keep WSL running (Windows)
-
-WSL shuts an idle distribution down shortly after its last `wsl.exe` client
-exits, background services included. Two layers prevent that. First,
-`%USERPROFILE%\.wslconfig` disables both idle timeouts and switches to
-mirrored networking (see step 3):
-
-```ini
-[wsl2]
-networkingMode=mirrored
-vmIdleTimeout=-1
-
-[general]
-instanceIdleTimeout=-1
-```
-
-Apply it with `wsl --shutdown` (this stops every running distribution).
-Second, a logon task boots the distribution and holds one headless client
-open for the whole session:
-
-```bat
-schtasks /create /tn "Arachne WSL keepalive" /sc onlogon /ru %USERNAME% /it ^
-  /rl limited /f ^
-  /tr "conhost.exe --headless wsl.exe -d Ubuntu --exec /usr/bin/sleep infinity"
-powershell -NoProfile -Command "$s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit 0; Set-ScheduledTask -TaskName 'Arachne WSL keepalive' -Settings $s"
-schtasks /run /tn "Arachne WSL keepalive"
-```
-
-`schtasks` cannot set the execution limit, and Task Scheduler's default
-stops a task after 72 hours; the `PowerShell` line removes that limit.
-
-The standby is therefore up whenever the owner is logged in to `halcyon`,
-which matches how that machine's availability is observed.
-
-### 3. Expose through Windows Tailscale Serve
-
-`halcyon`'s Tailscale client runs on Windows, not inside WSL. Mirrored
-networking shares one loopback between Windows and WSL, which is what lets
-Windows Serve reach the WSL processes without any LAN bind. Do not rely on
-the default NAT mode's localhost forwarding: its relay belongs to the
-interactive session that started WSL, so it is absent when the distribution
-was started from SSH or a background task.
-
-```bat
-"C:\Program Files\Tailscale\tailscale.exe" serve --bg --https=443 http://127.0.0.1:8878
-"C:\Program Files\Tailscale\tailscale.exe" serve --bg --https=8443 http://127.0.0.1:8879
-"C:\Program Files\Tailscale\tailscale.exe" serve status
-```
-
-**Known gap: the backend is not authenticated to the proxy.** SPEC §2's
-verified-HTTPS backend rule exists because loopback is not a per-user
-boundary, and `halcyon` is not single-principal: besides the owner it has
-`CodexSandboxOffline`/`CodexSandboxOnline` accounts that run agent code.
-While WSL is stopped, a process under one of those accounts could bind
-8878/8879 and receive the owner token or session cookies that Serve
-forwards. Closing this needs a TLS listener on the MCP adapter (it has none
-today) plus a name-constrained private CA trusted by Windows' machine store
-so Serve can target `https://localhost:…`. Until then, treat the standby as
-an accepted, owner-acknowledged exception and keep WSL running.
-
-Never `funnel`. From another tailnet device, `/health` at
-`https://halcyon.tail342046.ts.net/` must answer, sensitive routes must return
-`401` without credentials, and the MCP endpoint is
-`https://halcyon.tail342046.ts.net:8443/mcp`, registered by the plugin as
-`arachne-standby`.
+While a decision is pending on the standby, keep the MacBook awake and online
+(lid open or on power, or `caffeinate`); a sleeping MacBook leaves the brief
+unreachable until it wakes, though nothing is lost.
 
 ### Failover and failback
 
@@ -975,8 +881,8 @@ Nothing promotes or demotes. Agents publish new decisions to the standby only
 while the primary is unreachable, using a standby-specific cursor seeded from
 the standby's own `status(since=0)`. Decisions already pending on `cairn`
 wait for it to return. When `cairn` is back, new decisions go to it again;
-waits still pending on the standby finish there, and its history stays on
-`halcyon`. No state is copied in either direction.
+waits still pending on the standby finish there, and its history stays on the
+MacBook. No state is copied in either direction.
 
 ## Teardown
 

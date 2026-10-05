@@ -59,7 +59,7 @@ it unless it is an owner-only regular file, since sourcing executes it).
 
 ## Warm Standby
 
-The plugin also registers `arachne-standby`, an independent always-on
+The plugin also registers `arachne-standby`, an independent warm-standby
 instance for when the primary is down (override its endpoint with
 `ARACHNE_STANDBY_MCP_URL`; it uses the same token). It keeps its own rulings
 and sequence numbers, so the skill tracks a separate cursor for it and only
