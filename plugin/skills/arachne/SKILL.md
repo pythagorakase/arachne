@@ -14,7 +14,8 @@ by a separate process; they never expose the application origin.
 The Arachne client registration exposes the shared MCP adapter as server
 `arachne`. Five tools are available; Claude's bundled plugin surfaces them as
 `mcp__plugin_arachne_arachne__<tool>`, while a direct Codex registration uses
-`mcp__arachne__<tool>`:
+`mcp__arachne__<tool>`. A second registration, `arachne-standby`, exposes
+the same tools on an independent warm standby (see **Failover**):
 
 | Tool | Effect |
 |------|--------|
@@ -58,8 +59,9 @@ cursor file between concurrent agent sessions and never hand-edit it otherwise.
    instantly while a queued ruling exists, and every consumption then comes
    with an advancing `cursor` to persist after acting. `get_ruling` is a
    read-only peek (re-reading, auditing); it advances nothing, so never use
-   it as the consumption path. On error, stop and report: server, Tailscale,
-   or token trouble — do not improvise fallbacks.
+   it as the consumption path. If the primary is unreachable, follow
+   **Failover**; any other error (token, contract, Tailscale itself), stop
+   and report — do not improvise other fallbacks.
 1. **Author** a self-contained `decision_<slug>.html` per the page contract
    below.
 2. **Publish** with `publish_decision(name, html, issue)`, where `issue` is
@@ -94,6 +96,29 @@ cursor file between concurrent agent sessions and never hand-edit it otherwise.
    `submitted_at`), then persist the returned `cursor`. More decisions
    pending? Wait again with the new cursor — each `wait_for_ruling` returns
    instantly while the backlog is non-empty.
+
+## Failover
+
+`arachne` is the primary. `arachne-standby` is a separate always-on instance
+with its **own ruling store and sequence space** — not a replica.
+
+- Use `arachne` normally. Switch to `arachne-standby` for **new** decisions
+  only when the primary's tools are missing (the server failed to connect) or
+  its calls fail with connection errors or timeouts. Claude's plugin surfaces
+  the standby as `mcp__plugin_arachne_arachne-standby__<tool>`.
+- A decision is waited on and answered on the server it was published to.
+  Decisions already pending on a downed primary simply wait for it to return;
+  do not republish them unless the human asks.
+- Cursors are per server. Keep the standby's in its own file — the resolved
+  cursor path from **The Cursor** with `.standby` appended — and seed a
+  missing one from the standby's own `status(since=0)` latest sequence.
+  Never pass a primary cursor to the standby or the reverse: the numbers are
+  unrelated, and crossing them silently drops or replays rulings.
+- Tell the human the brief is in the **standby** inbox (its hostname differs).
+  Browser sessions are per hostname, so a device's first standby visit needs
+  `bootstrap_url()` from the standby.
+- Failback is automatic: once `arachne` connects again, publish new decisions
+  there. Finish any waits still pending on the standby first.
 
 ## Page Contract
 
@@ -173,8 +198,9 @@ capability expires automatically after 30 days.
 
 ## Gotchas
 
-- **Permissions.** Claude's plugin-bundled server requires
-  `"mcp__plugin_arachne_arachne__*"` in `permissions.allow`. Codex uses the
+- **Permissions.** Claude's plugin-bundled servers require
+  `"mcp__plugin_arachne_arachne__*"` and
+  `"mcp__plugin_arachne_arachne-standby__*"` in `permissions.allow`. Codex uses the
   direct `mcp__arachne__...` registration and its MCP approval settings.
 - **Token.** The connect-time helper resolves
   `${XDG_STATE_HOME:-$HOME/.local/state}/arachne/auth-token` (override:
@@ -185,7 +211,8 @@ capability expires automatically after 30 days.
   server then shows as failed/disconnected. Copy the token once from the
   server host.
 - **Endpoint.** Defaults to the author's deployment; override with
-  `ARACHNE_MCP_URL` in the environment that launches Claude Code.
+  `ARACHNE_MCP_URL` (and `ARACHNE_STANDBY_MCP_URL` for the standby) in the
+  environment that launches Claude Code. Both use the same token.
 - **Replay safety.** `wait_for_ruling` with the same `since` returns the same
   first-ruling-after — safe across drops and re-calls. Only advance the
   cursor file after acting.

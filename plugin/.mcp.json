@@ -4,6 +4,11 @@
       "type": "http",
       "url": "${ARACHNE_MCP_URL:-https://cairn.tail342046.ts.net:8443/mcp}",
       "headersHelper": "${CLAUDE_PLUGIN_ROOT}/bin/auth-headers.sh"
+    },
+    "arachne-standby": {
+      "type": "http",
+      "url": "${ARACHNE_STANDBY_MCP_URL:-https://halcyon.tail342046.ts.net:8443/mcp}",
+      "headersHelper": "${CLAUDE_PLUGIN_ROOT}/bin/auth-headers.sh"
     }
   }
 }

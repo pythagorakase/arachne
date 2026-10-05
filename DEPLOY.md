@@ -2,7 +2,10 @@
 
 > **Current deployment: `cairn`** (home Ubuntu box, system `tailscaled`,
 > user-systemd supervision), cut over 2026-07-19 as a deliberate fresh-state
-> migration; the seedbox's final rulings are archived client-side. The
+> migration; the seedbox's final rulings are archived client-side. **Warm
+> standby: `halcyon`** (Windows desktop, WSL2 Ubuntu) runs an independent
+> instance that agents use for new decisions while `cairn` is unreachable —
+> see [Warm standby on `halcyon`](#warm-standby-on-halcyon-windows--wsl2). The
 > MacBook-bridge and seedbox sections below are retained as the historical
 > runbook and for teardown reference.
 
@@ -817,6 +820,124 @@ paths become 404 immediately. Also confirm that `cloudflared` has no ingress
 rule targeting private ports 8788 or 8790, and that neither of those ports has
 become reachable off-tailnet. Unknown, expired, and revoked capability paths
 must remain indistinguishable.
+
+## Warm standby on `halcyon` (Windows + WSL2)
+
+`cairn` is a single headless box; when it drops off the tailnet nobody is home
+to restart it. `halcyon` is an always-on, non-headless Windows desktop whose
+outages the owner notices immediately, so it hosts a warm standby that agents
+fail over to for **new** decisions.
+
+The standby is an **independent instance, not a replica**. It has its own
+`ARACHNE_DATA_DIR`, published pages, and ruling sequence space. Replication
+was rejected deliberately: the failure being covered is exactly the one where
+`cairn`'s state is unreachable, and promoting a replica would need a fencing
+protocol to keep the single-writer rule (never two writable origins against
+one cursor) when `cairn` returns. With independent stores there is nothing to
+fence — each decision is published, answered, and waited on at one origin,
+and clients keep one cursor per server (the client skill's **Failover**
+section). The cost is a split history: standby rulings stay in `halcyon`'s
+inbox.
+
+Both instances share the owner token, so one client credential and
+`headersHelper` serve both MCP registrations. The core uses same-user
+loopback HTTP behind Tailscale TLS, as the personal MacBook bridge did; this
+is a single-owner personal machine, not a shared host.
+
+### 1. Install inside WSL
+
+In the WSL Ubuntu distribution (systemd enabled via `/etc/wsl.conf`
+`[boot] systemd=true`), as the owner user — **never `sudo` for `uv`**:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+git clone https://github.com/pythagorakase/arachne ~/arachne
+cd ~/arachne && uv sync --frozen
+install -d -m 700 ~/.local/state/arachne ~/.local/state/arachne-runtime
+install -m 600 /dev/stdin ~/.local/state/arachne/auth-token  # paste the owner token
+```
+
+Install this owner-only (`0600`) `~/.config/arachne/deployment.env`:
+
+```dotenv
+ARACHNE_RUNTIME_DIR=/home/pythagor/.local/state/arachne-runtime
+ARACHNE_DATA_DIR=/home/pythagor/.local/state/arachne
+ARACHNE_PAGES_DIR=/home/pythagor/arachne/pages
+ARACHNE_TOKEN_FILE=/home/pythagor/.local/state/arachne/auth-token
+ARACHNE_PORT=8878
+ARACHNE_PYTHON=/home/pythagor/arachne/.venv/bin/python
+ARACHNE_SECURE_COOKIE=true
+ARACHNE_URL=http://127.0.0.1:8878
+ARACHNE_PUBLIC_URL=https://halcyon.tail342046.ts.net
+ARACHNE_MCP_HOST=127.0.0.1
+ARACHNE_MCP_PORT=8879
+ARACHNE_MCP_ALLOWED_HOSTS=127.0.0.1:8879,localhost:8879,halcyon.tail342046.ts.net:8443
+ARACHNE_MCP_HEARTBEAT_SECONDS=30
+ARACHNE_REQUEST_TIMEOUT=570
+ARACHNE_MCP_PYTHON=/home/pythagor/arachne/.venv/bin/python
+```
+
+Install only the core and MCP user units. The public snapshot origin is not
+part of the standby; leave `arachne-share.service` uninstalled. Its
+`Upholds=` reference in `arachne.service` is a weak dependency, so a missing
+unit is ignored rather than failing the core (installing it unconfigured
+would instead leave it in a restart loop).
+
+```bash
+mkdir -p ~/.config/systemd/user
+install -m 0644 ~/arachne/deploy/systemd/arachne.service \
+  ~/arachne/deploy/systemd/arachne-mcp.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now arachne.service arachne-mcp.service
+sudo loginctl enable-linger "$USER"
+curl --fail http://127.0.0.1:8878/health
+```
+
+Lingering starts the user units whenever the distribution boots, without an
+interactive WSL shell.
+
+### 2. Keep WSL running (Windows)
+
+WSL shuts an idle distribution down shortly after its last `wsl.exe` client
+exits, background services included. A logon task holds one headless client
+open for the whole session:
+
+```bat
+schtasks /create /tn "Arachne WSL keepalive" /sc onlogon /rl limited /f ^
+  /tr "conhost.exe --headless wsl.exe -d Ubuntu --exec /usr/bin/sleep infinity"
+schtasks /run /tn "Arachne WSL keepalive"
+```
+
+The standby is therefore up whenever the owner is logged in to `halcyon`,
+which matches how that machine's availability is observed.
+
+### 3. Expose through Windows Tailscale Serve
+
+`halcyon`'s Tailscale client runs on Windows, not inside WSL. WSL2's NAT-mode
+localhost forwarding relays Windows `127.0.0.1:<port>` to listeners on WSL's
+loopback, which is what lets Windows Serve reach the WSL processes without
+any LAN bind:
+
+```bat
+"C:\Program Files\Tailscale\tailscale.exe" serve --bg --https=443 http://127.0.0.1:8878
+"C:\Program Files\Tailscale\tailscale.exe" serve --bg --https=8443 http://127.0.0.1:8879
+"C:\Program Files\Tailscale\tailscale.exe" serve status
+```
+
+Never `funnel`. From another tailnet device, `/health` at
+`https://halcyon.tail342046.ts.net/` must answer, sensitive routes must return
+`401` without credentials, and the MCP endpoint is
+`https://halcyon.tail342046.ts.net:8443/mcp`, registered by the plugin as
+`arachne-standby`.
+
+### Failover and failback
+
+Nothing promotes or demotes. Agents publish new decisions to the standby only
+while the primary is unreachable, using a standby-specific cursor seeded from
+the standby's own `status(since=0)`. Decisions already pending on `cairn`
+wait for it to return. When `cairn` is back, new decisions go to it again;
+waits still pending on the standby finish there, and its history stays on
+`halcyon`. No state is copied in either direction.
 
 ## Teardown
 
