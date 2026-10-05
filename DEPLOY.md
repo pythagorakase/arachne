@@ -2,15 +2,18 @@
 
 > **Current deployment: `cairn`** (home Ubuntu box, system `tailscaled`,
 > user-systemd supervision), cut over 2026-07-19 as a deliberate fresh-state
-> migration; the seedbox's final rulings are archived client-side. The
-> MacBook-bridge and seedbox sections below are retained as the historical
-> runbook and for teardown reference.
+> migration; the seedbox's final rulings are archived client-side. **Warm
+> standby: the MacBook `echo`** reuses the MacBook-bridge LaunchAgents as an
+> independent instance that agents use for new decisions while `cairn` is
+> unreachable — see [Warm standby on the MacBook](#warm-standby-on-the-macbook-echo).
+> The seedbox sections below are retained as the historical runbook and for
+> teardown reference.
 
 How to make Arachne's interactive application always-on and reachable from the
 owner's devices, tailnet-only. The optional public snapshot origin is a separate
 loopback process with its own narrowly scoped tunnel; it never exposes the
 inbox or application server. The durable deployment is the Ubuntu host `cairn`;
-the MacBook bridge is retained only as rollback state. The older Whatbox
+the MacBook bridge now serves as its independent warm standby. The older Whatbox
 procedure remains below as a shared-host reference, but is not part of the
 current deployment.
 
@@ -28,7 +31,7 @@ Tailscale TLS; Ubuntu should restore the verified private-CA backend.
 
 ---
 
-## Historical: MacBook bridge (retired)
+## MacBook bridge (now the warm standby)
 
 Use one owner-only `~/.config/arachne/deployment.env` for both the core and MCP
 adapter. Avoid ports already occupied by an older local decision server. For
@@ -313,7 +316,11 @@ no public port; stdlib footprint (not resource-intensive); rootless; none of the
 prohibited categories (LLM/mining/P2P/Tor). Squarely within the Whatbox software
 rules and AUP.
 
-## Moving the MacBook bridge to `cairn`
+## Historical: moving the MacBook bridge to `cairn`
+
+> Completed 2026-07-19. Do not run this procedure against the warm standby: the
+> standby is an independent instance, and quiescing it or copying its state
+> into `cairn` is never part of failover or failback.
 
 The cutover has one durable application boundary: the complete
 `ARACHNE_DATA_DIR` (including `auth-token` and `rulings/`) plus every published
@@ -817,6 +824,76 @@ paths become 404 immediately. Also confirm that `cloudflared` has no ingress
 rule targeting private ports 8788 or 8790, and that neither of those ports has
 become reachable off-tailnet. Unknown, expired, and revoked capability paths
 must remain indistinguishable.
+
+## Warm standby on the MacBook (`echo`)
+
+`cairn` is a single headless box; when it drops off the tailnet nobody is home
+to restart it. The MacBook `echo` hosts a warm standby that agents fail over to
+for **new** decisions. It is the [MacBook bridge](#macbook-bridge-now-the-warm-standby)
+above, unchanged: the same LaunchAgents, owner-only `deployment.env`, ports
+8878/8879, and same-user loopback HTTP behind Tailscale TLS.
+
+The standby is an **independent instance, not a replica**. It has its own
+`ARACHNE_DATA_DIR`, published pages, and ruling sequence space. Replication
+was rejected deliberately: the failure being covered is exactly the one where
+`cairn`'s state is unreachable, and promoting a replica would need a fencing
+protocol to keep the single-writer rule (never two writable origins against
+one cursor) when `cairn` returns. With independent stores there is nothing to
+fence — each decision is published, answered, and waited on at one origin,
+and clients keep one cursor per server (the client skill's **Failover**
+section). The cost is a split history: standby rulings stay in the MacBook's
+inbox. Both instances share the owner token, so one client credential and
+`headersHelper` serve both MCP registrations.
+
+Why the MacBook rather than an always-on desktop: plain loopback HTTP is only
+acceptable where loopback is effectively a single-owner boundary. `echo` has
+one human account, so any process able to claim 8878/8879 already runs as the
+owner and could read the token directly. A Windows desktop hosting
+Codex-sandbox principals failed that test and would have needed a TLS listener
+on the MCP adapter plus a private CA in the machine trust store; the MacBook
+needs neither. Its availability also tracks demand — the agents that publish
+and wait run on the same machine, so the standby is up whenever one of them
+is.
+
+### Enable
+
+With both LaunchAgents loaded (`launchctl list | grep arachne`) and healthy at
+`http://127.0.0.1:8878/health`, expose them through Tailscale Serve:
+
+```bash
+tailscale serve --bg --yes http://127.0.0.1:8878
+tailscale serve --bg --yes --https=8443 http://127.0.0.1:8879
+tailscale serve status
+```
+
+Never `funnel`. From another tailnet device `/health` at
+`https://echo.tail342046.ts.net/` must answer, sensitive routes must return
+`401` without credentials, and the MCP endpoint
+`https://echo.tail342046.ts.net:8443/mcp` is registered by the plugin as
+`arachne-standby`. The LaunchAgents run the code in the rendered
+`@@ARACHNE_ROOT@@` checkout; keep that checkout on `main` (or point it at a
+dedicated worktree) so day-to-day branch work cannot change what the standby
+runs on its next restart.
+
+While a decision is pending on the standby, keep the MacBook awake and online.
+An open lid or a connected charger does **not** prevent idle sleep; hold an
+explicit assertion for the duration instead, for example:
+
+```bash
+caffeinate -i -w <agent-pid>   # or plain `caffeinate -i` in a spare terminal
+```
+
+A sleeping MacBook leaves the brief unreachable until it wakes, though nothing
+is lost.
+
+### Failover and failback
+
+Nothing promotes or demotes. Agents publish new decisions to the standby only
+while the primary is unreachable, using a standby-specific cursor seeded from
+the standby's own `status(since=0)`. Decisions already pending on `cairn`
+wait for it to return. When `cairn` is back, new decisions go to it again;
+waits still pending on the standby finish there, and its history stays on the
+MacBook. No state is copied in either direction.
 
 ## Teardown
 

@@ -57,6 +57,15 @@ the launch environment or in `~/.config/arachne/env` (the helper script
 sources that file when the variable is not already set — and refuses to source
 it unless it is an owner-only regular file, since sourcing executes it).
 
+## Warm Standby
+
+The plugin also registers `arachne-standby`, an independent warm-standby
+instance for when the primary is down (override its endpoint with
+`ARACHNE_STANDBY_MCP_URL`; it uses the same token). It keeps its own rulings
+and sequence numbers, so the skill tracks a separate cursor for it and only
+routes new decisions there while `arachne` is unreachable. Without a standby
+deployment it simply shows as failed in `/mcp`. See `DEPLOY.md`.
+
 ## Permissions
 
 Plugins cannot grant their own permissions. To let the tools run unprompted in
@@ -68,7 +77,8 @@ servers are namespaced differently from `claude mcp add` registrations):
 {
   "permissions": {
     "allow": [
-      "mcp__plugin_arachne_arachne__*"
+      "mcp__plugin_arachne_arachne__*",
+      "mcp__plugin_arachne_arachne-standby__*"
     ]
   }
 }

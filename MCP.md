@@ -135,6 +135,16 @@ enabled_tools = ["status", "get_ruling", "wait_for_ruling", "publish_decision", 
 default_tools_approval_mode = "approve"
 ```
 
+To use the warm standby (see `DEPLOY.md`), register it as a second server
+with the same token variable and the same timeout and tool settings under
+`[mcp_servers.arachne-standby]`:
+
+```bash
+codex mcp add arachne-standby \
+  --url https://echo.tail342046.ts.net:8443/mcp \
+  --bearer-token-env-var ARACHNE_MCP_TOKEN
+```
+
 Give `wait_for_ruling` a tool timeout longer than the intended human wait. For
 a least-privilege profile, approve only these five named tools rather than
 granting general shell access. A running Codex desktop process may need to be
