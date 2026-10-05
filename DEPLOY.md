@@ -854,7 +854,14 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/pythagorakase/arachne ~/arachne
 cd ~/arachne && uv sync --frozen
 install -d -m 700 ~/.local/state/arachne ~/.local/state/arachne-runtime
-install -m 600 /dev/stdin ~/.local/state/arachne/auth-token  # paste the owner token
+```
+
+Copy the owner token over SSH stdin so it never touches the Windows
+filesystem or the terminal (Windows OpenSSH lands in `cmd.exe`):
+
+```bash
+ssh halcyon 'wsl -d Ubuntu -- bash -c "umask 077; cat > ~/.local/state/arachne/auth-token"' \
+  < ~/.local/state/arachne/auth-token
 ```
 
 Install this owner-only (`0600`) `~/.config/arachne/deployment.env`:
@@ -878,15 +885,15 @@ ARACHNE_MCP_PYTHON=/home/pythagor/arachne/.venv/bin/python
 ```
 
 Install only the core and MCP user units. The public snapshot origin is not
-part of the standby; leave `arachne-share.service` uninstalled. Its
-`Upholds=` reference in `arachne.service` is a weak dependency, so a missing
-unit is ignored rather than failing the core (installing it unconfigured
-would instead leave it in a restart loop).
+part of the standby, so drop `arachne-share.service` from the installed
+core unit's `Upholds=` rather than leaving a reference to a unit that does
+not exist.
 
 ```bash
 mkdir -p ~/.config/systemd/user
 install -m 0644 ~/arachne/deploy/systemd/arachne.service \
   ~/arachne/deploy/systemd/arachne-mcp.service ~/.config/systemd/user/
+sed -i 's/ arachne-share.service//' ~/.config/systemd/user/arachne.service
 systemctl --user daemon-reload
 systemctl --user enable --now arachne.service arachne-mcp.service
 sudo loginctl enable-linger "$USER"
@@ -899,11 +906,26 @@ interactive WSL shell.
 ### 2. Keep WSL running (Windows)
 
 WSL shuts an idle distribution down shortly after its last `wsl.exe` client
-exits, background services included. A logon task holds one headless client
+exits, background services included. Two layers prevent that. First,
+`%USERPROFILE%\.wslconfig` disables both idle timeouts and switches to
+mirrored networking (see step 3):
+
+```ini
+[wsl2]
+networkingMode=mirrored
+vmIdleTimeout=-1
+
+[general]
+instanceIdleTimeout=-1
+```
+
+Apply it with `wsl --shutdown` (this stops every running distribution).
+Second, a logon task boots the distribution and holds one headless client
 open for the whole session:
 
 ```bat
-schtasks /create /tn "Arachne WSL keepalive" /sc onlogon /rl limited /f ^
+schtasks /create /tn "Arachne WSL keepalive" /sc onlogon /ru %USERNAME% /it ^
+  /rl limited /f ^
   /tr "conhost.exe --headless wsl.exe -d Ubuntu --exec /usr/bin/sleep infinity"
 schtasks /run /tn "Arachne WSL keepalive"
 ```
@@ -913,10 +935,12 @@ which matches how that machine's availability is observed.
 
 ### 3. Expose through Windows Tailscale Serve
 
-`halcyon`'s Tailscale client runs on Windows, not inside WSL. WSL2's NAT-mode
-localhost forwarding relays Windows `127.0.0.1:<port>` to listeners on WSL's
-loopback, which is what lets Windows Serve reach the WSL processes without
-any LAN bind:
+`halcyon`'s Tailscale client runs on Windows, not inside WSL. Mirrored
+networking shares one loopback between Windows and WSL, which is what lets
+Windows Serve reach the WSL processes without any LAN bind. Do not rely on
+the default NAT mode's localhost forwarding: its relay belongs to the
+interactive session that started WSL, so it is absent when the distribution
+was started from SSH or a background task.
 
 ```bat
 "C:\Program Files\Tailscale\tailscale.exe" serve --bg --https=443 http://127.0.0.1:8878
