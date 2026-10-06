@@ -478,10 +478,12 @@ for (const candidate of [
             r"""
 const assert = require("node:assert/strict");
 const {
+  CACHE_NAME,
   OFFLINE_URL,
   STARTUP_TIMEOUT_MS,
   fetchInboxOrOffline,
   isInboxNavigation,
+  refreshOfflinePage,
 } = require("./ui/service-worker.js");
 const origin = "https://arachne.example-tailnet.ts.net";
 
@@ -513,10 +515,45 @@ class FakeAbortController {
 }
 
 (async () => {
+  // A configuration change (e.g. the standby link) must reach an installed
+  // worker whose bytes did not change: live loads re-cache the offline page,
+  // and a failed refresh keeps the previous copy.
+  const added = [];
+  await refreshOfflinePage({
+    cachesImpl: {
+      open: async (name) => {
+        assert.equal(name, CACHE_NAME);
+        return {add: async (request) => added.push(request)};
+      },
+    },
+    RequestImpl: class {
+      constructor(url, init) {
+        this.url = url;
+        this.init = init;
+      }
+    },
+  });
+  assert.deepEqual(
+    added.map((request) => [request.url, request.init.cache]),
+    [[OFFLINE_URL, "reload"]],
+  );
+  await refreshOfflinePage({
+    cachesImpl: {
+      open: async () => ({
+        add: async () => {
+          throw new Error("offline");
+        },
+      }),
+    },
+    RequestImpl: class {},
+  });
+
+  let liveSignals = 0;
   const live = new Response("live", {status: 200});
   const liveResult = await fetchInboxOrOffline(
     {url: `${origin}/`},
     {
+      onLive: () => liveSignals++,
       fetchImpl: async (_request, options) => {
         assert.ok(options.signal);
         return live;
@@ -529,6 +566,7 @@ class FakeAbortController {
     },
   );
   assert.equal(liveResult, live);
+  assert.equal(liveSignals, 1);
 
   const offline = new Response("offline", {status: 200});
   for (const fetchImpl of [
@@ -540,6 +578,9 @@ class FakeAbortController {
     const fallback = await fetchInboxOrOffline(
       {url: `${origin}/`},
       {
+        onLive: () => {
+          throw new Error("a fallback must not refresh the offline page");
+        },
         fetchImpl,
         matchImpl: async (url) => {
           assert.equal(url, OFFLINE_URL);

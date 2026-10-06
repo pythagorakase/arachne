@@ -29,7 +29,10 @@ async function fetchInboxOrOffline(request, options = {}) {
 
   try {
     const response = await fetchImpl(request, {signal: controller.signal});
-    if (response.status < 500) return response;
+    if (response.status < 500) {
+      if (options.onLive) options.onLive();
+      return response;
+    }
   } catch (_) {
     // Network errors and the bounded startup timeout share the safe fallback.
   } finally {
@@ -51,12 +54,28 @@ async function fetchInboxOrOffline(request, options = {}) {
   });
 }
 
+// The offline page is server-rendered from configuration (for example the
+// standby link), which can change without the worker's bytes changing. Every
+// live inbox load therefore re-caches it; a failed refresh keeps the old copy.
+async function refreshOfflinePage(options = {}) {
+  const cachesImpl = options.cachesImpl || globalThis.caches;
+  const RequestImpl = options.RequestImpl || globalThis.Request;
+  try {
+    const cache = await cachesImpl.open(CACHE_NAME);
+    await cache.add(new RequestImpl(OFFLINE_URL, {cache: "reload"}));
+  } catch (_) {
+    // Keep serving the previously cached offline page.
+  }
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = Object.freeze({
+    CACHE_NAME,
     OFFLINE_URL,
     STARTUP_TIMEOUT_MS,
     fetchInboxOrOffline,
     isInboxNavigation,
+    refreshOfflinePage,
   });
 }
 
@@ -89,6 +108,10 @@ if (typeof self !== "undefined" && self.addEventListener) {
 
   self.addEventListener("fetch", (event) => {
     if (!isInboxNavigation(event.request, self.location.origin)) return;
-    event.respondWith(fetchInboxOrOffline(event.request));
+    event.respondWith(
+      fetchInboxOrOffline(event.request, {
+        onLive: () => event.waitUntil(refreshOfflinePage()),
+      }),
+    );
   });
 }

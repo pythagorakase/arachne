@@ -835,9 +835,10 @@ above, unchanged: the same LaunchAgents, owner-only `deployment.env`, ports
 8878/8879, and same-user loopback HTTP behind Tailscale TLS.
 
 Set `ARACHNE_STANDBY_URL=https://echo.tail342046.ts.net` on the primary to link
-its offline screen to the standby inbox. Installed apps pick up this link only
-after their service worker updates while the primary is reachable: deploy to
-`cairn`, then open the app once online. Never set it on the standby itself
+its offline screen to the standby inbox. Installed apps re-cache the offline
+screen on every inbox load that reaches the primary, so the link (and any later
+change to it) arrives the next time the app opens online after deploying to
+`cairn`. Never set it on the standby itself
 pointing at the primary unless that reverse link is intended.
 
 The standby is an **independent instance, not a replica**. It has its own
