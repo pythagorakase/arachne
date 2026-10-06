@@ -76,6 +76,18 @@ a {
   letter-spacing: .12em;
   text-decoration: none;
 }
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+a.standby {
+  background: transparent;
+  color: #d3ad64;
+}
+.standby-note {
+  margin: 14px 0 0;
+}
 .privacy {
   margin: 22px 0 0;
   color: #74808d;
@@ -93,7 +105,7 @@ a {
     <li>Confirm you are signed in and the tailnet is connected.</li>
     <li>Return here and try again.</li>
   </ol>
-  <a href="/">TRY AGAIN</a>
+  <div class="actions"><a href="/">TRY AGAIN</a>@@ARACHNE_STANDBY_LINK@@</div>@@ARACHNE_STANDBY_NOTE@@
   <p class="privacy">If Tailscale asks you to authenticate, complete that step before retrying.</p>
 </main>
 </body>

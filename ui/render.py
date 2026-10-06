@@ -67,7 +67,8 @@ _FONT_ASSETS = frozenset(
 )
 # Every key in this map bypasses browser-session authentication in
 # ``server.ArachneHandler._get``. Keep it limited to non-sensitive install
-# branding; briefs, fonts, rulings, drafts, and inbox data must never enter it.
+# branding and offline recovery (including the non-secret standby origin);
+# briefs, fonts, rulings, drafts, and inbox data must never enter it.
 _PUBLIC_APP_ASSETS = {
     "/manifest.webmanifest": (
         _ASSET_DIR / "manifest.webmanifest",
@@ -245,7 +246,9 @@ def render_locked_inbox() -> bytes:
     return _inbox_document(_LOCKED_TEMPLATE.strip(), _LOCKED_SCRIPT)
 
 
-def public_app_asset(path: str) -> tuple[bytes, str] | None:
+def public_app_asset(
+    path: str, *, standby_url: str | None = None
+) -> tuple[bytes, str] | None:
     """Return one non-sensitive install asset from the exact public allowlist."""
 
     record = _PUBLIC_APP_ASSETS.get(path)
@@ -255,9 +258,30 @@ def public_app_asset(path: str) -> tuple[bytes, str] | None:
     if asset.is_symlink() or not asset.is_file():
         raise RuntimeError(f"Arachne install asset is missing or unsafe: {path!r}")
     try:
-        return asset.read_bytes(), content_type
+        body = asset.read_bytes()
     except OSError as exc:
         raise RuntimeError(f"could not load Arachne install asset {path!r}") from exc
+    if path == "/offline.html":
+        standby_link = standby_note = ""
+        if standby_url is not None:
+            standby_link = (
+                f'<a class="standby" href="{html.escape(standby_url, quote=True)}/">'
+                "OPEN STANDBY INBOX</a>"
+            )
+            standby_note = (
+                '\n  <p class="standby-note">If the loom itself is down, the standby'
+                " inbox keeps working. It holds separate decisions, and your first"
+                " visit may need a fresh login link.</p>"
+            )
+        body = _fill_template(
+            "offline.html",
+            body.decode("utf-8"),
+            {
+                "@@ARACHNE_STANDBY_LINK@@": standby_link,
+                "@@ARACHNE_STANDBY_NOTE@@": standby_note,
+            },
+        ).encode("utf-8")
+    return body, content_type
 
 
 def font_asset(name: str) -> bytes | None:

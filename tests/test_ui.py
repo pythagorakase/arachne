@@ -295,6 +295,7 @@ class UiStructureTests(unittest.TestCase):
         worker, worker_type = worker_record
         self.assertEqual(worker_type, "text/javascript; charset=utf-8")
         self.assertIn(b'const OFFLINE_URL = "/offline.html"', worker)
+        self.assertIn(b'const CACHE_NAME = `${CACHE_PREFIX}v2`;', worker)
         self.assertNotIn(b'cache.add("/")', worker)
 
         offline_record = public_app_asset("/offline.html")
@@ -304,9 +305,43 @@ class UiStructureTests(unittest.TestCase):
         self.assertEqual(offline_type, "text/html; charset=utf-8")
         self.assertIn(b"Cannot reach the loom", offline)
         self.assertIn(b"No decision data is cached", offline)
+        self.assertNotIn(b'class="standby"', offline)
+        self.assertNotIn(b"@@", offline)
+        template = (UI / "offline.html").read_bytes()
+        self.assertEqual(template.count(b"@@ARACHNE_STANDBY_LINK@@"), 1)
+        self.assertEqual(template.count(b"@@ARACHNE_STANDBY_NOTE@@"), 1)
+        self.assertNotIn(b"standby-note\">", offline)
+        self.assertEqual(
+            offline,
+            template.replace(b"@@ARACHNE_STANDBY_LINK@@", b"").replace(
+                b"@@ARACHNE_STANDBY_NOTE@@", b""
+            ),
+        )
 
         self.assertIsNone(public_app_asset("/ui/icons/arachne-icon.svg"))
         self.assertIsNone(public_app_asset("/ui/icons/unknown.png"))
+
+    def test_offline_standby_link_escapes_origin_and_preserves_csp(self) -> None:
+        record = public_app_asset(
+            "/offline.html", standby_url="https://echo&\"'.example"
+        )
+        assert record is not None
+        body = record[0].decode("utf-8")
+        self.assertIn(
+            '<a class="standby" href="https://echo&amp;&quot;&#x27;.example/"', body
+        )
+        self.assertIn("OPEN STANDBY INBOX</a>", body)
+        self.assertLess(body.index("TRY AGAIN</a>"), body.index('class="standby"'))
+        self.assertIn('<p class="standby-note">', body)
+        self.assertNotIn("style=", body)
+        self.assertIn("separate decisions", body)
+        self.assertIn("fresh login link", body)
+        self.assertNotIn("@@", body)
+        self.assertNotIn("<script", body)
+        self.assertIn(
+            "default-src 'none'; style-src 'unsafe-inline'; "
+            "form-action 'self'; base-uri 'none'", body
+        )
 
     def test_nav_capture_fixture_embeds_the_canonical_agent(self) -> None:
         canonical = (UI / "brief-agent.js").read_text(encoding="utf-8").strip()
@@ -443,10 +478,12 @@ for (const candidate of [
             r"""
 const assert = require("node:assert/strict");
 const {
+  CACHE_NAME,
   OFFLINE_URL,
   STARTUP_TIMEOUT_MS,
   fetchInboxOrOffline,
   isInboxNavigation,
+  refreshOfflinePage,
 } = require("./ui/service-worker.js");
 const origin = "https://arachne.example-tailnet.ts.net";
 
@@ -478,10 +515,45 @@ class FakeAbortController {
 }
 
 (async () => {
+  // A configuration change (e.g. the standby link) must reach an installed
+  // worker whose bytes did not change: live loads re-cache the offline page,
+  // and a failed refresh keeps the previous copy.
+  const added = [];
+  await refreshOfflinePage({
+    cachesImpl: {
+      open: async (name) => {
+        assert.equal(name, CACHE_NAME);
+        return {add: async (request) => added.push(request)};
+      },
+    },
+    RequestImpl: class {
+      constructor(url, init) {
+        this.url = url;
+        this.init = init;
+      }
+    },
+  });
+  assert.deepEqual(
+    added.map((request) => [request.url, request.init.cache]),
+    [[OFFLINE_URL, "reload"]],
+  );
+  await refreshOfflinePage({
+    cachesImpl: {
+      open: async () => ({
+        add: async () => {
+          throw new Error("offline");
+        },
+      }),
+    },
+    RequestImpl: class {},
+  });
+
+  let liveSignals = 0;
   const live = new Response("live", {status: 200});
   const liveResult = await fetchInboxOrOffline(
     {url: `${origin}/`},
     {
+      onLive: () => liveSignals++,
       fetchImpl: async (_request, options) => {
         assert.ok(options.signal);
         return live;
@@ -494,6 +566,7 @@ class FakeAbortController {
     },
   );
   assert.equal(liveResult, live);
+  assert.equal(liveSignals, 1);
 
   const offline = new Response("offline", {status: 200});
   for (const fetchImpl of [
@@ -505,6 +578,9 @@ class FakeAbortController {
     const fallback = await fetchInboxOrOffline(
       {url: `${origin}/`},
       {
+        onLive: () => {
+          throw new Error("a fallback must not refresh the offline page");
+        },
         fetchImpl,
         matchImpl: async (url) => {
           assert.equal(url, OFFLINE_URL);

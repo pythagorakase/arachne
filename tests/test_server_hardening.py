@@ -261,6 +261,37 @@ class AuthenticationExpiryTests(unittest.TestCase):
                     expected,
                 )
 
+    def test_standby_origin_uses_public_origin_validation(self) -> None:
+        for value in (
+            "http://echo.example",
+            "https://echo.example/path",
+            "https://user@echo.example",
+            "https://echo.example?query=yes",
+            "https://echo.example#fragment",
+            "https://echo.example:not-a-port",
+            "garbage",
+        ):
+            with self.subTest(value=value), patch.dict(
+                os.environ, {"ARACHNE_STANDBY_URL": value}, clear=True
+            ):
+                with self.assertRaisesRegex(ValueError, "ARACHNE_STANDBY_URL"):
+                    arachne_server.Config.from_environment()
+
+        for value, expected in (
+            (None, None),
+            ("", None),
+            ("  ", None),
+            (" https://echo.example/ ", "https://echo.example"),
+            ("http://127.0.0.1:8878/", "http://127.0.0.1:8878"),
+        ):
+            environment = {} if value is None else {"ARACHNE_STANDBY_URL": value}
+            with self.subTest(value=value), patch.dict(
+                os.environ, environment, clear=True
+            ):
+                self.assertEqual(
+                    arachne_server.Config.from_environment().standby_url, expected
+                )
+
     def test_share_capability_is_redacted_from_private_access_logs(self) -> None:
         share_id = "A" * 32
         rendered_log = arachne_server.SHARE_REVOCATION_LOG_ID.sub(

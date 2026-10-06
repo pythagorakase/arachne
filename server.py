@@ -235,6 +235,7 @@ class Config:
     tls_key_file: Path | None
     share_dir: Path | None = None
     share_public_url: str | None = None
+    standby_url: str | None = None
 
     @classmethod
     def from_environment(cls) -> "Config":
@@ -308,6 +309,10 @@ class Config:
             share_public_url=_optional_public_origin(
                 "ARACHNE_SHARE_PUBLIC_URL",
                 os.environ.get("ARACHNE_SHARE_PUBLIC_URL"),
+            ),
+            standby_url=_optional_public_origin(
+                "ARACHNE_STANDBY_URL",
+                os.environ.get("ARACHNE_STANDBY_URL"),
             ),
         )
 
@@ -949,7 +954,7 @@ class ArachneHandler(BaseHTTPRequestHandler):
     def _get(self) -> None:
         parsed = urlsplit(self.path)
         path = unquote(parsed.path)
-        install_asset = public_app_asset(path)
+        install_asset = public_app_asset(path, standby_url=self.arachne.config.standby_url)
         if install_asset is not None:
             if parsed.query:
                 raise ClientProblem(
