@@ -34,11 +34,13 @@ class RunningArachne:
         data: Path,
         wait_seconds: float = 0.5,
         share_public_url: str | None = None,
+        standby_url: str | None = None,
     ) -> None:
         self.pages = pages
         self.data = data
         self.wait_seconds = wait_seconds
         self.share_public_url = share_public_url
+        self.standby_url = standby_url
         self.port = free_port()
         self.process: subprocess.Popen[str] | None = None
 
@@ -68,6 +70,9 @@ class RunningArachne:
         )
         if self.share_public_url is not None:
             environment["ARACHNE_SHARE_PUBLIC_URL"] = self.share_public_url
+        environment.pop("ARACHNE_STANDBY_URL", None)
+        if self.standby_url is not None:
+            environment["ARACHNE_STANDBY_URL"] = self.standby_url
         self.process = subprocess.Popen(
             [sys.executable, str(REPO / "server.py")],
             cwd=REPO,
@@ -806,6 +811,11 @@ class ArachneEndToEndTests(unittest.TestCase):
                 self.assertEqual(response.headers["Content-Type"], content_type)
                 self.assertEqual(response.headers["Cache-Control"], "no-store")
                 self.assertIn(marker, body)
+                if path == "/offline.html":
+                    self.assertNotIn(b'class="standby"', body)
+                    self.assertNotIn(b"@@", body)
+                else:
+                    self.assertIn(b'const CACHE_NAME = `${CACHE_PREFIX}v2`;', body)
 
         for path in (
             "/ui/icons/arachne-icon.svg",
@@ -818,6 +828,32 @@ class ArachneEndToEndTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as queried:
             urlopen(f"{self.service.url}/manifest.webmanifest?download=1", timeout=1)
         self.assertEqual(queried.exception.code, 404)
+
+    def test_offline_standby_is_public_and_escapes_configured_origin(self) -> None:
+        for origin, escaped in (
+            ("https://echo.tail342046.ts.net/", "https://echo.tail342046.ts.net"),
+            ("https://echo&\"'.example", "https://echo&amp;&quot;&#x27;.example"),
+        ):
+            with self.subTest(origin=origin):
+                self.service.standby_url = origin
+                self.service.restart()
+                with urlopen(f"{self.service.url}/offline.html", timeout=1) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(
+                        response.headers["Content-Type"], "text/html; charset=utf-8"
+                    )
+                    self.assertIsNone(response.headers.get("Set-Cookie"))
+                    body = response.read().decode("utf-8")
+                self.assertIn(f'<a class="standby" href="{escaped}/"', body)
+                self.assertIn("OPEN STANDBY INBOX</a>", body)
+                self.assertNotIn("@@", body)
+                self.assertNotIn("decision_476.html", body)
+                self.assertNotIn(self.service.token, body)
+                self.assertNotIn("<script", body)
+                self.assertIn(
+                    "default-src 'none'; style-src 'unsafe-inline'; "
+                    "form-action 'self'; base-uri 'none'", body
+                )
 
     def test_browser_session_slides_past_half_life(self) -> None:
         import server as arachne_server

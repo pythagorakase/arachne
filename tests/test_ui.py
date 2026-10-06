@@ -295,6 +295,7 @@ class UiStructureTests(unittest.TestCase):
         worker, worker_type = worker_record
         self.assertEqual(worker_type, "text/javascript; charset=utf-8")
         self.assertIn(b'const OFFLINE_URL = "/offline.html"', worker)
+        self.assertIn(b'const CACHE_NAME = `${CACHE_PREFIX}v2`;', worker)
         self.assertNotIn(b'cache.add("/")', worker)
 
         offline_record = public_app_asset("/offline.html")
@@ -304,9 +305,43 @@ class UiStructureTests(unittest.TestCase):
         self.assertEqual(offline_type, "text/html; charset=utf-8")
         self.assertIn(b"Cannot reach the loom", offline)
         self.assertIn(b"No decision data is cached", offline)
+        self.assertNotIn(b'class="standby"', offline)
+        self.assertNotIn(b"@@", offline)
+        template = (UI / "offline.html").read_bytes()
+        self.assertEqual(template.count(b"@@ARACHNE_STANDBY_LINK@@"), 1)
+        self.assertEqual(template.count(b"@@ARACHNE_STANDBY_NOTE@@"), 1)
+        self.assertNotIn(b"standby-note\">", offline)
+        self.assertEqual(
+            offline,
+            template.replace(b"@@ARACHNE_STANDBY_LINK@@", b"").replace(
+                b"@@ARACHNE_STANDBY_NOTE@@", b""
+            ),
+        )
 
         self.assertIsNone(public_app_asset("/ui/icons/arachne-icon.svg"))
         self.assertIsNone(public_app_asset("/ui/icons/unknown.png"))
+
+    def test_offline_standby_link_escapes_origin_and_preserves_csp(self) -> None:
+        record = public_app_asset(
+            "/offline.html", standby_url="https://echo&\"'.example"
+        )
+        assert record is not None
+        body = record[0].decode("utf-8")
+        self.assertIn(
+            '<a class="standby" href="https://echo&amp;&quot;&#x27;.example/"', body
+        )
+        self.assertIn("OPEN STANDBY INBOX</a>", body)
+        self.assertLess(body.index("TRY AGAIN</a>"), body.index('class="standby"'))
+        self.assertIn('<p class="standby-note">', body)
+        self.assertNotIn("style=", body)
+        self.assertIn("separate decisions", body)
+        self.assertIn("fresh login link", body)
+        self.assertNotIn("@@", body)
+        self.assertNotIn("<script", body)
+        self.assertIn(
+            "default-src 'none'; style-src 'unsafe-inline'; "
+            "form-action 'self'; base-uri 'none'", body
+        )
 
     def test_nav_capture_fixture_embeds_the_canonical_agent(self) -> None:
         canonical = (UI / "brief-agent.js").read_text(encoding="utf-8").strip()
