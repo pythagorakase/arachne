@@ -128,15 +128,23 @@ def backup():
         # RulingStore creates a missing rulings/ directory, so an empty or
         # truncated source would otherwise "verify" as a fresh store.
         state = partial / "state"
-        for required in ("rulings", "auth-token"):
-            if not os.path.lexists(state / required):
-                raise ValueError(f"source state is missing {required}")
+        # Both must be real entries: a dangling auth-token symlink would be
+        # rejected by the server on restore.
+        if (state / "rulings").is_symlink() or not (state / "rulings").is_dir():
+            raise ValueError("source state is missing rulings")
+        if (state / "auth-token").is_symlink() or not (state / "auth-token").is_file():
+            raise ValueError("source state is missing auth-token")
         store = RulingStore(state)
-        if previous is not None:
-            prior = json.loads((previous / "MANIFEST.json").read_text(encoding="utf-8"))
-            # A shrinking store is a broken source, never a newer truth to keep.
-            if store.latest_sequence < int(prior["latest_sequence"]):
-                raise ValueError("source sequence regressed")
+        # A shrinking store is a broken source, never a newer truth to keep.
+        # Compare with every retained snapshot, not the latest-named one: a
+        # backward clock step can make an older snapshot sort last.
+        baseline = max(
+            (int(json.loads((path / "MANIFEST.json").read_text(encoding="utf-8"))
+                 ["latest_sequence"]) for path in snapshots),
+            default=0,
+        )
+        if store.latest_sequence < baseline:
+            raise ValueError("source sequence regressed")
         manifest = {
             "latest_sequence": store.latest_sequence,
             "ruling_count": store.count,

@@ -599,7 +599,9 @@ are scoped to the old hostname; bootstrap each browser at the new URL. If a
 deliberate fresh-state migration is chosen instead, first prove no source ruling
 is unconsumed, reset/reconcile the orchestrator cursor to the destination's
 sequence, rotate the token, and bootstrap every browser. Never combine an empty
-ruling store with the old cursor.
+ruling store with the old cursor. Start a new off-host backup history as well
+(see *Off-host backup and down alerts*): the old snapshots' higher sequence
+would otherwise make every new backup fail the regression check.
 
 ## Custom tailnet-only domain (`arachne.pythagora.net`)
 
@@ -984,10 +986,19 @@ Snapshots are `YYYYMMDDTHHMMSSZ/{state,pages,MANIFEST.json}`; `latest` switches
 atomically after both transfers and `RulingStore` validation. Unchanged files
 are hardlinked to the previous complete snapshot: do not edit snapshots in
 place. `file_count` counts copied file entries, excluding the manifest itself.
-Only timestamp-named complete snapshot directories are pruned. A killed process
-can leave a lock (`.backup.lock` or `watch-primary.lock`); verify its recorded PID
-is no longer running before manually removing that lock and any abandoned
-`.partial` directory. Ordinary failures and termination clean up automatically.
+Only timestamp-named complete snapshot directories are pruned. The lock files
+(`.backup.lock`, `watch-primary.lock`) are persistent `flock` targets that the
+kernel releases when their holder exits, even after `kill -9`; never delete
+them, since a run that locks a recreated file no longer excludes one holding
+the old inode. A killed backup can leave an abandoned `.partial` directory,
+which is safe to remove once no backup is running. Ordinary failures and
+termination clean up automatically.
+
+A snapshot whose ruling sequence is lower than any retained snapshot's is
+refused, so a truncated source can never displace good backups. After a
+deliberate fresh-state migration (below), point `ARACHNE_BACKUP_DIR` at a new
+directory to start a fresh history, and keep the old one as the pre-migration
+archive.
 
 Backups contain the owner token. Keep them owner-only and never sync them to a
 cloud folder unencrypted. A live pull is a recovery snapshot, not a quiesced

@@ -492,6 +492,30 @@ class StateBackupTests(MacOpsBase):
         self.assertEqual(self.snapshots(), good)
         self.assertEqual(os.readlink(self.backups / "latest"), latest)
 
+    def test_dangling_token_and_regression_against_any_retained_snapshot(self) -> None:
+        self.configure(ARACHNE_BACKUP_KEEP="2")
+        self.run_backup()
+        good = self.snapshots()
+        token = self.state / "auth-token"
+        token.unlink()
+        token.symlink_to(self.root / "nowhere")
+        self.run_backup(success=False)
+        self.assertEqual(self.snapshots(), good)
+        token.unlink()
+        token.write_text("private-test-token\n", encoding="utf-8")
+        token.chmod(0o600)
+        # A future-dated older snapshot sorts last; the newer, higher-sequence
+        # snapshot must still set the baseline.
+        future = self.backups / "29991231T235959Z"
+        good[0].rename(future)
+        self.store.file("third", "Third ruling", {})
+        self.run_backup()
+        [current] = [path for path in self.snapshots() if path != future]
+        third = sorted((self.state / "rulings").glob("*.json"))[-1]
+        third.unlink()
+        self.run_backup(success=False)
+        self.assertTrue(current.exists())
+
     def test_clock_step_backward_keeps_the_new_snapshot(self) -> None:
         self.configure(ARACHNE_BACKUP_KEEP="1")
         self.run_backup()
