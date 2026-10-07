@@ -33,6 +33,32 @@ def run_bash(script: Path, env: dict[str, str], *arguments: str) -> subprocess.C
     )
 
 
+def flock_held(path: Path) -> bool:
+    import fcntl
+    descriptor = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(descriptor)
+    return False
+
+
+def hold_flock(path: Path) -> subprocess.Popen[str]:
+    """Hold an exclusive flock on *path* from another process until killed."""
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         "import fcntl, os, sys, time\n"
+         "d = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)\n"
+         "fcntl.flock(d, fcntl.LOCK_EX)\n"
+         "print('held', flush=True)\n"
+         "time.sleep(60)\n", str(path)],
+        stdout=subprocess.PIPE, text=True)
+    assert holder.stdout is not None and holder.stdout.readline().strip() == "held"
+    return holder
+
+
 def system_ca_bundle() -> str | None:
     candidates = [
         ssl.get_default_verify_paths().cafile,
@@ -362,7 +388,9 @@ class StateBackupTests(MacOpsBase):
         self.assertEqual(len((result.stdout + result.stderr).splitlines()), 1)
         self.assertNotIn("private-test-token", result.stdout + result.stderr)
         self.assertFalse(list(self.backups.glob("*.partial")))
-        self.assertFalse((self.backups / ".backup.lock").exists())
+        lock = self.backups / ".backup.lock"
+        if lock.exists():
+            self.assertFalse(flock_held(lock))
         return result
 
     def snapshots(self) -> list[Path]:
@@ -428,26 +456,54 @@ class StateBackupTests(MacOpsBase):
     def test_lock_contention_is_a_clean_noop(self) -> None:
         self.backups.mkdir()
         lock = self.backups / ".backup.lock"
-        lock.mkdir()
-        (lock / "pid").write_text(f"{os.getpid()}\n")
-        result = run_bash(REPO / "bin/pull-state-backup.sh", self.env)
+        holder = hold_flock(lock)
+        try:
+            result = run_bash(REPO / "bin/pull-state-backup.sh", self.env)
+        finally:
+            holder.kill()
+            holder.wait()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("locked", result.stdout)
         self.assertEqual(self.snapshots(), [])
-        self.assertTrue(lock.is_dir())
 
-    def test_lock_left_by_a_killed_run_is_reclaimed(self) -> None:
+    def test_lock_of_a_killed_run_does_not_block(self) -> None:
         self.backups.mkdir()
         lock = self.backups / ".backup.lock"
-        lock.mkdir()
-        dead = subprocess.Popen(["true"])
-        dead.wait()
-        (lock / "pid").write_text(f"{dead.pid}\n")
-        result = run_bash(REPO / "bin/pull-state-backup.sh", self.env)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("complete", result.stdout)
+        holder = hold_flock(lock)
+        holder.kill()
+        holder.wait()
+        self.run_backup()
         self.assertEqual(len(self.snapshots()), 1)
-        self.assertFalse(lock.exists())
+
+    def test_missing_rulings_or_regressed_sequence_never_prunes_good_snapshots(self) -> None:
+        self.configure(ARACHNE_BACKUP_KEEP="1")
+        self.run_backup()
+        good = self.snapshots()
+        latest = os.readlink(self.backups / "latest")
+        rulings = self.state / "rulings"
+        shutil.move(rulings, self.root / "moved rulings")
+        self.run_backup(success=False)
+        self.assertEqual(self.snapshots(), good)
+        self.assertEqual(os.readlink(self.backups / "latest"), latest)
+        rulings.mkdir()
+        # Keep only the first ruling: a valid store whose sequence went backward.
+        shutil.copy(sorted((self.root / "moved rulings").glob("*.json"))[0], rulings)
+        self.run_backup(success=False)
+        self.assertEqual(self.snapshots(), good)
+        self.assertEqual(os.readlink(self.backups / "latest"), latest)
+
+    def test_clock_step_backward_keeps_the_new_snapshot(self) -> None:
+        self.configure(ARACHNE_BACKUP_KEEP="1")
+        self.run_backup()
+        future = self.backups / "29991231T235959Z"
+        self.snapshots()[0].rename(future)
+        os.replace(self.backups / "latest", self.backups / "latest.old")
+        (self.backups / "latest").symlink_to(future.name)
+        (self.backups / "latest.old").unlink()
+        self.run_backup()
+        [kept] = self.snapshots()
+        self.assertNotEqual(kept, future)
+        self.assertEqual((self.backups / "latest").resolve(), kept.resolve())
 
     def test_invalid_retention_does_not_prune(self) -> None:
         self.run_backup()
@@ -541,7 +597,7 @@ class PrimaryWatchTests(MacOpsBase):
         self.assertEqual(json.loads(state.read_text()), {"failures": 0, "down": False})
         self.assertEqual(state.stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.runtime.stat().st_mode & 0o777, 0o700)
-        self.assertFalse((self.runtime / "watch-primary.lock").exists())
+        self.assertFalse(flock_held(self.runtime / "watch-primary.lock"))
 
     def test_control_failure_freezes_counter_and_down_state(self) -> None:
         self.configure(ARACHNE_WATCH_CONTROL_URL=self.base + "/control")
@@ -612,22 +668,16 @@ class PrimaryWatchTests(MacOpsBase):
         self.check()
         self.assertEqual(self.alerts()[0][0], "Arachne DOWN")
 
-    def test_old_pidless_lock_is_reclaimed(self) -> None:
-        lock = self.runtime / "watch-primary.lock"
-        lock.mkdir(parents=True)
-        stale = time.time() - 120
-        os.utime(lock, (stale, stale))
-        self.responses["/primary"] = (500, b"{}")
-        self.assertNotIn("locked", self.check().stdout)
-        self.assertFalse(lock.exists())
-
     def test_lock_contention_preserves_state(self) -> None:
         self.check()
         before = (self.runtime / "watch-primary.json").read_bytes()
-        lock = self.runtime / "watch-primary.lock"
-        lock.mkdir()
+        holder = hold_flock(self.runtime / "watch-primary.lock")
         self.responses["/primary"] = (500, b'{}')
-        self.assertIn("locked", self.check().stdout)
+        try:
+            self.assertIn("locked", self.check().stdout)
+        finally:
+            holder.kill()
+            holder.wait()
         self.assertEqual((self.runtime / "watch-primary.json").read_bytes(), before)
         self.assertEqual(self.alerts(), [])
 

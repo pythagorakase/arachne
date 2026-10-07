@@ -997,7 +997,11 @@ cutover copy; it can omit writes made during or after transfer.
 or LaunchAgents, and stop its armed agent waiters first. Keep the original
 snapshot intact. Copy `state/` and `pages/` with `rsync -a` into **fresh**, private
 data and pages directories; never merge into a live store or restore via
-hardlinks. Point `ARACHNE_DATA_DIR` and `ARACHNE_PAGES_DIR` at those directories.
+hardlinks. Point `ARACHNE_DATA_DIR` and `ARACHNE_PAGES_DIR` at those directories,
+and repoint every explicit state path that names the old store, notably
+`ARACHNE_TOKEN_FILE` (the restored `auth-token`) and `ARACHNE_SHARE_DIR` (the
+restored `shares/`); otherwise the restored rulings load while clients get
+`401` against a different token and restored public shares go unused.
 Retain the destination's own TLS identity and runtime configuration; do not
 copy TLS keys from another host. Before starting services, load the restored
 data with `server.RulingStore(Path(restored_data_dir))` from the checkout and

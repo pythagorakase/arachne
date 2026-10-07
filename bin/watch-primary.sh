@@ -30,15 +30,14 @@ source "$arachne_deploy_env"
 set +a
 
 exec "${ARACHNE_PYTHON:-${arachne_root}/.venv/bin/python}" - <<'PY'
+import fcntl
 import json
 import os
 from pathlib import Path
 import re
-import shutil
 import signal
 import subprocess
 import sys
-import time
 from urllib.parse import urlsplit
 
 
@@ -50,36 +49,15 @@ for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
     signal.signal(sig, interrupted)
 
 
-def acquire(lock):
-    """Take the directory lock, reclaiming one left by a killed run."""
-    for _ in range(2):
-        try:
-            lock.mkdir(mode=0o700)
-            return True
-        except FileExistsError:
-            pass
-        try:
-            owner = int((lock / "pid").read_text(encoding="ascii").strip())
-        except (OSError, ValueError):
-            owner = None
-        if owner is None:
-            # A holder writes its PID immediately; only an old PID-less lock
-            # is abandoned rather than mid-acquisition.
-            try:
-                if time.time() - lock.stat().st_mtime < 60:
-                    return False
-            except FileNotFoundError:
-                continue
-        else:
-            try:
-                os.kill(owner, 0)
-                return False
-            except PermissionError:
-                return False
-            except ProcessLookupError:
-                pass
-        shutil.rmtree(lock, ignore_errors=True)
-    return False
+def acquire(path):
+    """Hold an exclusive flock; the kernel releases it if this process dies."""
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(descriptor)
+        return None
+    return descriptor
 
 
 def check_url(url):
@@ -138,13 +116,12 @@ def watch():
     if runtime.stat().st_uid != os.getuid():
         raise ValueError("runtime directory must be owner-controlled")
     runtime.chmod(0o700)
-    lock = runtime / "watch-primary.lock"
-    if not acquire(lock):
+    lock = acquire(runtime / "watch-primary.lock")
+    if lock is None:
         print("Arachne watch: skipped (locked)")
         return
-    temporary = lock / "state.json"
+    temporary = runtime / f".watch-primary.{os.getpid()}.json"
     try:
-        (lock / "pid").write_text(f"{os.getpid()}\n", encoding="ascii")
         state_file = runtime / "watch-primary.json"
         state = {"failures": 0, "down": False}
         if os.path.lexists(state_file):
@@ -184,8 +161,7 @@ def watch():
         print(f"Arachne watch: {status} (failures={state['failures']})")
     finally:
         temporary.unlink(missing_ok=True)
-        (lock / "pid").unlink(missing_ok=True)
-        lock.rmdir()
+        os.close(lock)
 
 
 try:

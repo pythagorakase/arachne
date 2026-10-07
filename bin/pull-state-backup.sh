@@ -30,6 +30,7 @@ source "$arachne_deploy_env"
 set +a
 
 exec "${ARACHNE_PYTHON:-${arachne_root}/.venv/bin/python}" - "$arachne_root" <<'PY'
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -53,36 +54,15 @@ for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
     signal.signal(sig, interrupted)
 
 
-def acquire(lock):
-    """Take the directory lock, reclaiming one left by a killed run."""
-    for _ in range(2):
-        try:
-            lock.mkdir(mode=0o700)
-            return True
-        except FileExistsError:
-            pass
-        try:
-            owner = int((lock / "pid").read_text(encoding="ascii").strip())
-        except (OSError, ValueError):
-            owner = None
-        if owner is None:
-            # A holder writes its PID immediately; only an old PID-less lock
-            # is abandoned rather than mid-acquisition.
-            try:
-                if time.time() - lock.stat().st_mtime < 60:
-                    return False
-            except FileNotFoundError:
-                continue
-        else:
-            try:
-                os.kill(owner, 0)
-                return False
-            except PermissionError:
-                return False
-            except ProcessLookupError:
-                pass
-        shutil.rmtree(lock, ignore_errors=True)
-    return False
+def acquire(path):
+    """Hold an exclusive flock; the kernel releases it if this process dies."""
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(descriptor)
+        return None
+    return descriptor
 
 
 def complete(path):
@@ -115,16 +95,14 @@ def backup():
     latest = directory / "latest"
     if os.path.lexists(latest) and not latest.is_symlink():
         raise ValueError("latest must be a symlink")
-    lock = directory / ".backup.lock"
-    if not acquire(lock):
+    lock = acquire(directory / ".backup.lock")
+    if lock is None:
         print("Arachne backup: skipped (locked)")
         return
 
     partial = None
-    published = None
-    latest_temp = lock / "latest"
+    latest_temp = directory / f".latest.{os.getpid()}"
     try:
-        (lock / "pid").write_text(f"{os.getpid()}\n", encoding="ascii")
         snapshots = sorted(path for path in directory.iterdir() if complete(path))
         previous = snapshots[-1] if snapshots else None
         # A manual second run in the same second must not overwrite a snapshot.
@@ -147,7 +125,18 @@ def backup():
             subprocess.run(arguments, check=True, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
 
-        store = RulingStore(partial / "state")
+        # RulingStore creates a missing rulings/ directory, so an empty or
+        # truncated source would otherwise "verify" as a fresh store.
+        state = partial / "state"
+        for required in ("rulings", "auth-token"):
+            if not os.path.lexists(state / required):
+                raise ValueError(f"source state is missing {required}")
+        store = RulingStore(state)
+        if previous is not None:
+            prior = json.loads((previous / "MANIFEST.json").read_text(encoding="utf-8"))
+            # A shrinking store is a broken source, never a newer truth to keep.
+            if store.latest_sequence < int(prior["latest_sequence"]):
+                raise ValueError("source sequence regressed")
         manifest = {
             "latest_sequence": store.latest_sequence,
             "ruling_count": store.count,
@@ -159,25 +148,23 @@ def backup():
             json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         partial.chmod(0o700)
         partial.rename(destination)
+        # From here the snapshot is complete and verified: keep it even if an
+        # interruption stops `latest` from moving.
         partial = None
-        published = destination
         latest_temp.symlink_to(name)
         # os.replace replaces a symlink itself, unlike platform-specific mv behavior.
         os.replace(latest_temp, latest)
-        published = None
-        snapshots.append(destination)
-        for obsolete in sorted(snapshots)[:-keep]:
-            # Only recognized complete snapshots are eligible, never other entries.
+        # Never prune the snapshot just published, even if a clock step makes
+        # its name sort before older ones. Only recognized complete snapshots
+        # are eligible, never other entries.
+        for obsolete in sorted(snapshots)[:-(keep - 1) or None]:
             shutil.rmtree(obsolete)
         print(f"Arachne backup: {name} complete (sequence={store.latest_sequence}, rulings={store.count})")
     finally:
         if partial is not None:
             shutil.rmtree(partial)
-        if published is not None:
-            shutil.rmtree(published)
         latest_temp.unlink(missing_ok=True)
-        (lock / "pid").unlink(missing_ok=True)
-        lock.rmdir()
+        os.close(lock)
 
 
 try:
