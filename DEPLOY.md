@@ -878,7 +878,11 @@ Never `funnel`. From another tailnet device `/health` at
 `https://echo.tail342046.ts.net/` must answer, sensitive routes must return
 `401` without credentials, and the MCP endpoint
 `https://echo.tail342046.ts.net:8443/mcp` is registered by the plugin as
-`arachne-standby`. The LaunchAgents run the code in the rendered
+`arachne-standby`. Give the standby its own empty `ARACHNE_PAGES_DIR` (for
+example `~/.local/state/arachne-standby/pages`), never the checkout's
+`pages/`: that directory is the local working copy of pages published to
+`cairn`, and the standby would list every one of them as an open decision.
+The LaunchAgents run the code in the rendered
 `@@ARACHNE_ROOT@@` checkout; keep that checkout on `main` (or point it at a
 dedicated worktree) so day-to-day branch work cannot change what the standby
 runs on its next restart.
