@@ -356,7 +356,7 @@ class MacOpsTests(MacOpsBase):
             if kind == "backup":
                 self.assertEqual(plist["StartCalendarInterval"], {"Hour": 3, "Minute": 17})
             else:
-                self.assertEqual(plist["StartInterval"], 300)
+                self.assertEqual(plist["StartInterval"], 3600)
                 self.assertIs(plist["RunAtLoad"], True)
 
 

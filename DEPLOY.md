@@ -913,7 +913,7 @@ MacBook. No state is copied in either direction.
 
 The owner's MacBook pulls `cairn` state and published pages nightly at 03:17
 local time; launchd runs a missed calendar slot after wake. A separate
-LaunchAgent checks primary health at load and every 300 seconds while awake.
+LaunchAgent checks primary health at load and hourly while awake.
 These backups are archives, not replicas of the independent warm standby.
 
 Add the following to the MacBook's owner-only (regular, mode `0600`)
