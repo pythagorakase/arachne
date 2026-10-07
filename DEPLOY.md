@@ -599,7 +599,9 @@ are scoped to the old hostname; bootstrap each browser at the new URL. If a
 deliberate fresh-state migration is chosen instead, first prove no source ruling
 is unconsumed, reset/reconcile the orchestrator cursor to the destination's
 sequence, rotate the token, and bootstrap every browser. Never combine an empty
-ruling store with the old cursor.
+ruling store with the old cursor. Start a new off-host backup history as well
+(see *Off-host backup and down alerts*): the old snapshots' higher sequence
+would otherwise make every new backup fail the regression check.
 
 ## Custom tailnet-only domain (`arachne.pythagora.net`)
 
@@ -906,6 +908,121 @@ the standby's own `status(since=0)`. Decisions already pending on `cairn`
 wait for it to return. When `cairn` is back, new decisions go to it again;
 waits still pending on the standby finish there, and its history stays on the
 MacBook. No state is copied in either direction.
+
+## Off-host backup and down alerts (MacBook)
+
+The owner's MacBook pulls `cairn` state and published pages nightly at 03:17
+local time; launchd runs a missed calendar slot after wake. A separate
+LaunchAgent checks primary health at load and every 300 seconds while awake.
+These backups are archives, not replicas of the independent warm standby.
+
+Add the following to the MacBook's owner-only (regular, mode `0600`)
+`~/.config/arachne/deployment.env`, retaining its existing service settings:
+
+```dotenv
+ARACHNE_BACKUP_STATE_SRC=cairn:.local/state/arachne/
+ARACHNE_BACKUP_PAGES_SRC=cairn:arachne/pages/
+ARACHNE_BACKUP_DIR=/Users/pythagor/.local/state/arachne-backups/cairn
+ARACHNE_BACKUP_KEEP=30
+ARACHNE_PRIMARY_HEALTH_URL=https://cairn.tail342046.ts.net:8444/health
+ARACHNE_WATCH_CONTROL_URL=https://echo.tail342046.ts.net/health
+ARACHNE_WATCH_FAILURES=2
+ARACHNE_RUNTIME_DIR=/Users/pythagor/.local/state/arachne-runtime
+```
+
+Both tools honor `ARACHNE_DEPLOY_ENV` and `ARACHNE_PYTHON` (default:
+the checkout's `.venv/bin/python`); they use existing Python, rsync, SSH, and
+curl installations. SSH alias `cairn` must work with `BatchMode=yes`.
+`BACKUP_KEEP` and `WATCH_FAILURES` are positive integers, defaulting to 30 and 2.
+Health/control URLs require verified HTTPS; health means HTTP 200 and JSON
+`"ok": true` within 15 seconds. If both checks fail, the failure counter is
+left unchanged and the watcher logs `local network unavailable`. The control
+URL is optional; because this one is the standby's own health endpoint, a
+standby service failure can also suppress primary alerts.
+
+The optional `ARACHNE_ALERT_COMMAND` is an executable path (not a shell
+expression), called with title and message as two arguments. Otherwise macOS
+notifications are used. Alerts name the standby inbox from `ARACHNE_WATCH_STANDBY_URL`, falling
+back to this host's `ARACHNE_PUBLIC_URL` (the standby itself). Do not set
+`ARACHNE_STANDBY_URL` here: on the standby it would make the server's offline
+screen link to itself.
+The watcher persists each DOWN/RECOVERED transition before invoking the alert
+command, so command failures are logged but not retried on subsequent checks.
+
+Render and load the two templates from the stable checkout used by the standby:
+
+```bash
+cd /Users/pythagor/arachne
+umask 077
+mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.local/state/arachne-runtime"
+chmod 700 "$HOME/.local/state/arachne-runtime"
+.venv/bin/python - <<'PY'
+from pathlib import Path
+from xml.sax.saxutils import escape
+root = Path.cwd()
+home = Path.home()
+values = {
+    'ARACHNE_ROOT': str(root),
+    'ARACHNE_DEPLOY_ENV': str(home / '.config/arachne/deployment.env'),
+    'ARACHNE_RUNTIME_DIR': str(home / '.local/state/arachne-runtime'),
+}
+for kind in ('backup', 'watch'):
+    name = f'com.pythagorakase.arachne.{kind}.plist'
+    text = (root / 'deploy/macos' / (name + '.in')).read_text()
+    for key, value in values.items():
+        text = text.replace(f'@@{key}@@', escape(value))
+    target = home / 'Library/LaunchAgents' / name
+    target.write_text(text)
+    target.chmod(0o600)
+PY
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.pythagorakase.arachne.backup.plist"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.pythagorakase.arachne.watch.plist"
+./bin/pull-state-backup.sh       # initial backup and validation
+```
+
+Use `launchctl bootout` on the corresponding plist before reloading an already
+loaded job. Logs are `backup.log` and `watch.log` under `ARACHNE_RUNTIME_DIR`.
+Snapshots are `YYYYMMDDTHHMMSSZ/{state,pages,MANIFEST.json}`; `latest` switches
+atomically after both transfers and `RulingStore` validation. Unchanged files
+are hardlinked to the previous complete snapshot: do not edit snapshots in
+place. `file_count` counts copied file entries, excluding the manifest itself.
+Only timestamp-named complete snapshot directories are pruned. The lock files
+(`.backup.lock`, `watch-primary.lock`) are persistent `flock` targets that the
+kernel releases when their holder exits, even after `kill -9`; never delete
+them, since a run that locks a recreated file no longer excludes one holding
+the old inode. A killed backup can leave an abandoned `.partial` directory,
+which is safe to remove once no backup is running. Ordinary failures and
+termination clean up automatically.
+
+A snapshot whose ruling sequence is lower than any retained snapshot's is
+refused, so a truncated source can never displace good backups. After a
+deliberate fresh-state migration (below), point `ARACHNE_BACKUP_DIR` at a new
+directory to start a fresh history, and keep the old one as the pre-migration
+archive.
+
+Backups contain the owner token. Keep them owner-only and never sync them to a
+cloud folder unencrypted. A live pull is a recovery snapshot, not a quiesced
+cutover copy; it can omit writes made during or after transfer.
+
+**RESTORE:** Stop the destination service and MCP adapter, disable its watchdog
+or LaunchAgents, and stop its armed agent waiters first. Keep the original
+snapshot intact. Copy `state/` and `pages/` with `rsync -a` into **fresh**, private
+data and pages directories; never merge into a live store or restore via
+hardlinks. Point `ARACHNE_DATA_DIR` and `ARACHNE_PAGES_DIR` at those directories,
+and repoint every explicit state path that names the old store, notably
+`ARACHNE_TOKEN_FILE` (the restored `auth-token`) and `ARACHNE_SHARE_DIR` (the
+restored `shares/`); otherwise the restored rulings load while clients get
+`401` against a different token and restored public shares go unused.
+Retain the destination's own TLS identity and runtime configuration; do not
+copy TLS keys from another host. Before starting services, load the restored
+data with `server.RulingStore(Path(restored_data_dir))` from the checkout and
+verify its `latest_sequence` equals `MANIFEST.json`'s value. Reconcile every
+agent's cursor against that sequence using the existing
+[cutover continuity guidance](#3-start-and-prove-continuity): never resume a
+restored store behind an agent's cursor without explicitly reconciling consumed
+and unconsumed rulings. Fence the old primary, then start and verify health,
+sequence, a known page, and authenticated MCP before rearming waiters. Keep the
+standby's independent store and cursors separate throughout.
 
 ## Teardown
 
